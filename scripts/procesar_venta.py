@@ -78,7 +78,7 @@ def _mostrar_resultado(venta_parseada, venta_guardada, montos: dict, session) ->
     cliente = venta_parseada.cliente.nombre if venta_parseada.cliente else "(sin datos)"
     metodo_pago = venta_parseada.pago.metodo
     if venta_parseada.pago.cuenta_destino:
-        metodo_pago += f" → {venta_parseada.pago.cuenta_destino}"
+        metodo_pago += f" > {venta_parseada.pago.cuenta_destino}"
 
     print(f"  Canal       : {canal}")
     print(f"  Cliente     : {cliente}")
