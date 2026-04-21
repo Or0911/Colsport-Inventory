@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(venv/Scripts/pip install:*)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(venv/Scripts/python -m pytest tests/ -v)",
+      "PowerShell(& \"C:\\\\Users\\\\ORMAN\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\" --version 2>&1)",
+      "PowerShell(& \"C:\\\\Users\\\\ORMAN\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\" -m pytest --version 2>&1)",
+      "Bash(venv/Scripts/python.exe scripts/procesar_venta.py 'VENTA WHATSAPP *)"
     ]
   }
 }

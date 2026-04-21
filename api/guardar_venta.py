@@ -52,12 +52,28 @@ def _normalizar(texto: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", texto.lower().strip())
 
 
+def _tokenizar(texto: str) -> set[str]:
+    """
+    Normaliza y divide en tokens separando límites número-letra.
+    Aplica stemming básico: quita la "s" final en palabras de más de 3 chars
+    para que singular/plural coincidan (mancuernas → mancuerna).
+    """
+    normalizado = _normalizar(texto)
+    separado = re.sub(r"(\d)([a-z])", r"\1 \2", normalizado)
+    separado = re.sub(r"([a-z])(\d)", r"\1 \2", separado)
+    tokens = separado.split()
+    # Stemming mínimo: plural → singular
+    tokens = [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in tokens]
+    return set(tokens)
+
+
 def _buscar_sku(productos_catalogo: list, nombre_raw: str) -> Optional[str]:
     """
     Busca el SKU de un producto en el catálogo ya cargado en memoria.
 
     El catálogo se pasa como lista para evitar una consulta a la BD por cada item.
     Estrategia: overlap de palabras clave con umbral del 60%.
+    Los tokens se separan en límites número-letra para que "5kg" coincida con "5".
 
     Args:
         productos_catalogo: Lista de objetos Producto ya traídos de la BD.
@@ -66,8 +82,12 @@ def _buscar_sku(productos_catalogo: list, nombre_raw: str) -> Optional[str]:
     Returns:
         SKU del mejor match, o None si no supera el umbral.
     """
-    palabras = _normalizar(nombre_raw).split()
-    palabras_clave = [p for p in palabras if len(p) > 2 and p not in {"und", "unidad"}]
+    tokens_raw = _tokenizar(nombre_raw)
+    # Incluir palabras >= 2 chars (ej: "kg", "lb") y dígitos solos (ej: "5", "20")
+    palabras_clave = [
+        p for p in tokens_raw
+        if (len(p) >= 2 or p.isdigit()) and p not in {"und", "unidad", "par", "x2", "x4", "x8"}
+    ]
 
     if not palabras_clave or not productos_catalogo:
         return None
@@ -76,11 +96,19 @@ def _buscar_sku(productos_catalogo: list, nombre_raw: str) -> Optional[str]:
     mejor_score = 0.0
 
     for producto in productos_catalogo:
-        nombre_normalizado = _normalizar(producto.nombre)
-        coincidencias = sum(1 for p in palabras_clave if p in nombre_normalizado)
-        score = coincidencias / len(palabras_clave)
+        palabras_catalogo = _tokenizar(producto.nombre)
+        coincidencias = sum(1 for p in palabras_clave if p in palabras_catalogo)
+        recall = coincidencias / len(palabras_clave)
 
-        if score > mejor_score and score >= 0.6:
+        if recall < 0.6:
+            continue
+
+        # F1 combina recall y precisión: penaliza productos con muchos tokens extra
+        # (evita que un kit que contiene el producto gane sobre el producto individual)
+        precision = coincidencias / len(palabras_catalogo) if palabras_catalogo else 0
+        score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+        if score > mejor_score:
             mejor_score = score
             mejor_match = producto.sku
 
@@ -257,10 +285,11 @@ def guardar_venta(session: Session, venta_parseada: VentaParseada, texto_origina
     # 9. Detalle Rappi (comision_monto calculado en Python)
     if venta_parseada.rappi_detalle:
         r = venta_parseada.rappi_detalle
+        tipo = r.tipo or ("Pro" if "Pro" in venta_parseada.canal else "Regular")
         rappi = RappiDetalle(
             venta_id=venta.id,
-            order_id=r.order_id,
-            tipo=r.tipo,
+            order_id=r.order_id or "sin-id",
+            tipo=tipo,
             comision_porcentaje=r.comision_porcentaje,
             comision_monto=montos["comision_monto"],
         )

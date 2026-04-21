@@ -21,4 +21,4 @@ class VentaItem(Base):
     subtotal: Mapped[int] = mapped_column(Integer, nullable=False)
 
     venta: Mapped["Venta"] = relationship(back_populates="items")
-    producto: Mapped[Optional["Producto"]] = relationship(back_populates=None, foreign_keys=[sku])
+    producto: Mapped[Optional["Producto"]] = relationship(back_populates="items_venta", foreign_keys=[sku])
