@@ -49,7 +49,7 @@ col-inventory-app/
 ├── implementos.csv             # Catálogo de implementos deportivos (kettlebells, etc.)
 ├── suplementos.csv             # Catálogo de suplementos (proteínas, creatina, etc.)
 ├── requirements.txt
-└── .env                        # Variables de entorno (no subir al repo)
+└── .env                        # Variables de entorno
 ```
 
 ---
