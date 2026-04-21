@@ -14,4 +14,4 @@ class Producto(Base):
     categoria: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     stock_actual: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
-    items_venta: Mapped[list["VentaItem"]] = relationship(back_populates=None)
+    items_venta: Mapped[list["VentaItem"]] = relationship(back_populates="producto", foreign_keys="VentaItem.sku")
