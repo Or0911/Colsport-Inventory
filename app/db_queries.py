@@ -194,12 +194,17 @@ def get_inventario(_engine, search: str = "") -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def get_alertas_stock(_engine, umbral: int = 3) -> pd.DataFrame:
+    """
+    umbral=-1 → solo stock negativo (< 0)
+    umbral>=0 → stock <= umbral
+    """
     with Session(_engine) as s:
-        rows = s.execute(
-            select(Producto.sku, Producto.nombre, Producto.marca, Producto.stock_actual)
-            .where(Producto.stock_actual <= umbral)
-            .order_by(Producto.stock_actual)
-        ).all()
+        q = select(Producto.sku, Producto.nombre, Producto.marca, Producto.stock_actual)
+        if umbral < 0:
+            q = q.where(Producto.stock_actual < 0)
+        else:
+            q = q.where(Producto.stock_actual <= umbral)
+        rows = s.execute(q.order_by(Producto.stock_actual)).all()
     return pd.DataFrame(rows, columns=["SKU", "Nombre", "Marca", "Stock"])
 
 

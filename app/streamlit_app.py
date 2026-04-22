@@ -174,7 +174,10 @@ def page_login():
         pwd = st.text_input("Contraseña", type="password", key="login_pwd",
                             placeholder="Ingresa la contraseña")
         if st.button("Ingresar", type="primary", use_container_width=True):
-            expected = os.getenv("APP_PASSWORD", "colsports2024")
+            expected = os.getenv("APP_PASSWORD")
+            if not expected:
+                st.error("APP_PASSWORD no está configurada en el archivo .env")
+                st.stop()
             if pwd == expected:
                 st.session_state.authenticated = True
                 st.rerun()
@@ -283,9 +286,10 @@ def page_nueva_venta(engine):
         if st.session_state.get("sale_saved") and st.session_state.get("last_venta_id"):
             st.success(f"✅ Venta **#{st.session_state.last_venta_id}** guardada correctamente.")
             if st.button("➕ Registrar otra venta", type="primary", use_container_width=True):
-                for k in ["parsed_sale", "sale_montos", "sale_saved", "last_venta_id"]:
-                    st.session_state[k] = None if k != "sale_saved" else False
-                st.session_state.pop("sale_message", None)
+                for k in ["parsed_sale", "sale_montos", "last_venta_id"]:
+                    st.session_state[k] = None
+                st.session_state["sale_saved"] = False
+                st.session_state["sale_message"] = ""
                 st.rerun()
             return
 
@@ -382,6 +386,7 @@ def page_nueva_venta(engine):
 
                         st.session_state.sale_saved = True
                         st.session_state.last_venta_id = venta_id
+                        st.session_state["sale_message"] = ""   # limpiar el campo
 
                         # Invalidar cachés del dashboard
                         get_ventas_por_canal.clear()
@@ -411,21 +416,28 @@ def page_nueva_venta(engine):
 def page_dashboard(engine):
     st.markdown('<div class="section-title">📊 Dashboard de Ventas</div>', unsafe_allow_html=True)
 
+    # Backing state para fechas (sin colisión con los widgets)
+    if "_dash_start" not in st.session_state:
+        st.session_state["_dash_start"] = date.today() - timedelta(days=29)
+    if "_dash_end" not in st.session_state:
+        st.session_state["_dash_end"] = date.today()
+
     # Filtro de fechas
     col_d1, col_d2, col_d3 = st.columns([1, 1, 3])
     with col_d1:
-        start_date = st.date_input("Desde", value=date.today() - timedelta(days=29),
-                                   key="dash_start")
+        start_date = st.date_input("Desde", value=st.session_state["_dash_start"])
+        st.session_state["_dash_start"] = start_date
     with col_d2:
-        end_date = st.date_input("Hasta", value=date.today(), key="dash_end")
+        end_date = st.date_input("Hasta", value=st.session_state["_dash_end"])
+        st.session_state["_dash_end"] = end_date
 
     with col_d3:
         quick_cols = st.columns(4)
         periods = [("Hoy", 0), ("7 días", 6), ("30 días", 29), ("90 días", 89)]
         for i, (label, delta) in enumerate(periods):
             if quick_cols[i].button(label, key=f"period_{delta}"):
-                st.session_state.dash_start = date.today() - timedelta(days=delta)
-                st.session_state.dash_end = date.today()
+                st.session_state["_dash_start"] = date.today() - timedelta(days=delta)
+                st.session_state["_dash_end"] = date.today()
                 st.rerun()
 
     st.divider()
@@ -470,8 +482,14 @@ def page_dashboard(engine):
 
     df_fac = get_top_facturadores(engine)
     with gp2:
-        st.markdown("**💳 Ranking por método de pago**")
-        st.plotly_chart(chart_top_facturadores(df_fac), use_container_width=True)
+        st.markdown("**💳 Ingresos por método de pago**")
+        if df_fac.empty:
+            st.info("Sin datos.")
+        else:
+            df_fac_display = df_fac.copy()
+            df_fac_display["Total"] = df_fac_display["Total"].apply(fmt_cop)
+            df_fac_display.columns = ["Método de pago", "# Ventas", "Total recaudado"]
+            st.dataframe(df_fac_display, use_container_width=True, hide_index=True)
 
     # ── Tabla de ventas recientes ──
     st.markdown("**Ventas recientes**")
@@ -519,31 +537,50 @@ def page_inventario(engine):
 
     # ── Tab 2: Alertas ──
     with tab_alertas:
-        umbral = st.slider("Umbral de alerta (stock ≤)", 0, 10, 3, key="umbral_alerta")
-        df_alerta = get_alertas_stock(engine, umbral)
-
-        if df_alerta.empty:
-            st.success(f"✅ Todos los productos tienen stock > {umbral}.")
+        # Sección 1: stock negativo — siempre visible
+        df_negativos = get_alertas_stock(engine, umbral=-1)
+        st.markdown("#### 🔴 Stock negativo (vendidos sin stock)")
+        if df_negativos.empty:
+            st.success("No hay productos con stock negativo.")
         else:
-            st.warning(f"⚠️ {len(df_alerta)} productos con stock ≤ {umbral}")
-            for _, row in df_alerta.iterrows():
-                color = "#e74c3c" if row["Stock"] < 0 else "#e67e22"
-                icon  = "🔴" if row["Stock"] < 0 else "🟡"
+            st.error(f"❗ {len(df_negativos)} productos con stock negativo — requieren reposición urgente")
+            for _, row in df_negativos.iterrows():
                 st.markdown(
                     f'<div class="alert-item">'
-                    f'{icon} <b>[{row["SKU"]}]</b> {row["Nombre"]} '
-                    f'— <span style="color:{color};font-weight:700">Stock: {row["Stock"]}</span>'
+                    f'🔴 <b>[{row["SKU"]}]</b> {row["Nombre"]} '
+                    f'— <span style="color:#e74c3c;font-weight:700">Stock: {row["Stock"]}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
         st.markdown("---")
-        st.markdown("**📋 Pedidos sin stock (vendidos con stock negativo)**")
+
+        # Sección 2: stock bajo — controlado por slider
+        st.markdown("#### 🟡 Stock bajo")
+        umbral = st.slider("Mostrar productos con stock entre 0 y:", 1, 10, 5,
+                           key="umbral_alerta")
+        df_bajo = get_alertas_stock(engine, umbral=umbral)
+        df_bajo = df_bajo[df_bajo["Stock"] >= 0]  # excluir los negativos ya mostrados arriba
+
+        if df_bajo.empty:
+            st.success(f"✅ No hay productos con stock entre 0 y {umbral}.")
+        else:
+            st.warning(f"⚠️ {len(df_bajo)} productos con stock entre 0 y {umbral}")
+            for _, row in df_bajo.iterrows():
+                st.markdown(
+                    f'<div class="alert-item" style="background:#fef9e7;border-color:#e67e22">'
+                    f'🟡 <b>[{row["SKU"]}]</b> {row["Nombre"]} '
+                    f'— <span style="color:#d35400;font-weight:700">Stock: {row["Stock"]}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("---")
+        st.markdown("#### 📋 Detalle: pedidos sin stock")
         df_sin = get_pedidos_sin_stock(engine)
         if df_sin.empty:
             st.success("No hay pedidos pendientes por reponer.")
         else:
-            st.error(f"❗ {len(df_sin)} productos requieren reposición urgente")
             st.dataframe(df_sin, use_container_width=True, hide_index=True)
 
     # ── Tab 3: Hot Products ──
