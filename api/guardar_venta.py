@@ -38,7 +38,8 @@ load_dotenv(dotenv_path=os.path.join(_root, ".env"), override=True)
 
 from models import (
     Base, Canal, Cliente, Venta, EstadoVenta,
-    VentaItem, Pago, Envio, RappiDetalle, Producto
+    VentaItem, Pago, Envio, RappiDetalle, Producto,
+    ComboComponente, AlertaPedido,
 )
 from api.motor_ia import VentaParseada, calcular_montos
 
@@ -190,17 +191,60 @@ def _crear_items(
     return items_con_sku
 
 
-def _descontar_stock(session: Session, items_con_sku: list[tuple[str, int]]) -> None:
+def _descontar_stock(
+    session: Session,
+    items_con_sku: list[tuple[str, int]],
+    venta_id: int,
+) -> None:
     """
     Descuenta el stock de cada producto vendido.
-    Stock negativo es intencional: señala venta sin stock registrado.
+
+    - Si el SKU es un combo, descuenta los componentes individuales (no el combo).
+    - Si un componente queda con stock negativo tras la venta, registra una
+      fila en alertas_pedido para seguimiento de reposición.
+    - Stock negativo en productos normales es intencional: indica venta sin stock.
     """
+    # Cargar en memoria qué SKUs son combos y sus componentes
+    combo_map: dict[str, list[tuple[str, int]]] = {}
+    skus_vendidos = [sku for sku, _ in items_con_sku]
+    filas_combo = session.execute(
+        select(ComboComponente).where(ComboComponente.combo_sku.in_(skus_vendidos))
+    ).scalars().all()
+    for cc in filas_combo:
+        combo_map.setdefault(cc.combo_sku, []).append((cc.componente_sku, cc.cantidad))
+
     for sku, cantidad in items_con_sku:
-        session.execute(
-            update(Producto)
-            .where(Producto.sku == sku)
-            .values(stock_actual=Producto.stock_actual - cantidad)
-        )
+        if sku in combo_map:
+            # Combo: descontar cada componente × cantidad vendida del combo
+            for comp_sku, cant_por_combo in combo_map[sku]:
+                cant_total = cant_por_combo * cantidad
+                prod = session.execute(
+                    select(Producto).where(Producto.sku == comp_sku)
+                ).scalar_one_or_none()
+                if prod is None:
+                    continue
+                stock_antes = prod.stock_actual
+                session.execute(
+                    update(Producto)
+                    .where(Producto.sku == comp_sku)
+                    .values(stock_actual=Producto.stock_actual - cant_total)
+                )
+                stock_despues = stock_antes - cant_total
+                if stock_despues < 0:
+                    session.add(AlertaPedido(
+                        venta_id=venta_id,
+                        combo_sku=sku,
+                        componente_sku=comp_sku,
+                        componente_nombre=prod.nombre,
+                        cantidad_faltante=abs(stock_despues),
+                    ))
+        else:
+            # Producto individual: descuento directo
+            session.execute(
+                update(Producto)
+                .where(Producto.sku == sku)
+                .values(stock_actual=Producto.stock_actual - cantidad)
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +339,7 @@ def guardar_venta(session: Session, venta_parseada: VentaParseada, texto_origina
         )
         session.add(rappi)
 
-    # 10. Descontar stock
-    _descontar_stock(session, items_con_sku)
+    # 10. Descontar stock (con expansión de combos y alertas automáticas)
+    _descontar_stock(session, items_con_sku, venta.id)
 
     return venta

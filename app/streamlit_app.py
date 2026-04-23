@@ -119,10 +119,15 @@ from app.db_queries import (
     get_engine, get_kpis, get_ventas_por_canal, get_tendencia_diaria,
     get_top_productos, get_top_facturadores, get_ventas_recientes,
     get_inventario, get_alertas_stock, get_pedidos_sin_stock,
+    get_combos_stock_virtual, get_alertas_pedido, marcar_alerta_resuelta,
+    get_compras_recientes, get_catalogo_skus,
+    get_kpis_compras, get_tendencia_compras, get_compras_por_proveedor, get_margen_diario,
+    get_ventas_hora_canal, get_inventario_sunburst,
 )
 from app.charts import (
     chart_ventas_canal, chart_tendencia, chart_top_productos,
-    chart_top_facturadores, kpi_card,
+    kpi_card,
+    chart_sankey, chart_waterfall, chart_heatmap, chart_sunburst,
 )
 
 
@@ -206,8 +211,8 @@ def render_sidebar():
         )
         st.divider()
 
-        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦"}
-        labels = {"nueva_venta": "Nueva Venta", "dashboard": "Dashboard", "inventario": "Inventario"}
+        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒"}
+        labels = {"nueva_venta": "Nueva Venta", "dashboard": "Dashboard", "inventario": "Inventario", "compras": "Compras"}
         for page, label in labels.items():
             if st.button(f"{icons[page]}  {label}", key=f"nav_{page}"):
                 st.session_state.current_page = page
@@ -234,6 +239,11 @@ def render_sidebar():
 def page_nueva_venta(engine):
     st.markdown('<div class="section-title">📝 Nueva Venta</div>', unsafe_allow_html=True)
 
+    # Versión del textarea: incrementar para forzar widget vacío (método garantizado en Streamlit)
+    if "sale_msg_v" not in st.session_state:
+        st.session_state["sale_msg_v"] = 0
+    sale_key = f"sale_msg_{st.session_state['sale_msg_v']}"
+
     col_left, col_right = st.columns([1, 1], gap="large")
 
     # ── Columna izquierda: formulario ──
@@ -246,24 +256,24 @@ def page_nueva_venta(engine):
                 "1 und Creatina IMN 133 serv\n$139.000\nTransferencia bancolombia"
             ),
             height=260,
-            key="sale_message",
+            key=sale_key,
             label_visibility="collapsed",
         )
 
         c1, c2 = st.columns([3, 1])
         with c1:
-            parsear_btn = st.button("🔍 Parsear Venta", type="primary",
+            parsear_btn = st.button("⬆️ Procesar Venta", type="primary",
                                     use_container_width=True, key="btn_parsear")
         with c2:
             if st.button("🗑️", use_container_width=True, key="btn_limpiar",
                          help="Limpiar formulario"):
                 for k in ["parsed_sale", "sale_montos", "sale_saved", "last_venta_id"]:
                     st.session_state[k] = None if k != "sale_saved" else False
-                st.session_state.pop("sale_message", None)
+                st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
                 st.rerun()
 
         if parsear_btn:
-            msg = st.session_state.get("sale_message", "").strip()
+            msg = st.session_state.get(sale_key, "").strip()
             if not msg:
                 st.warning("Pega un mensaje antes de parsear.")
             else:
@@ -289,7 +299,7 @@ def page_nueva_venta(engine):
                 for k in ["parsed_sale", "sale_montos", "last_venta_id"]:
                     st.session_state[k] = None
                 st.session_state["sale_saved"] = False
-                st.session_state["sale_message"] = ""
+                st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
                 st.rerun()
             return
 
@@ -374,7 +384,7 @@ def page_nueva_venta(engine):
         with b1:
             if st.button("✅ Confirmar y Guardar", type="primary",
                          use_container_width=True, key="btn_guardar"):
-                msg = st.session_state.get("sale_message", "")
+                msg = st.session_state.get(sale_key, "")
                 with st.spinner("Guardando en base de datos..."):
                     try:
                         from sqlalchemy.orm import Session as DBSession
@@ -386,7 +396,7 @@ def page_nueva_venta(engine):
 
                         st.session_state.sale_saved = True
                         st.session_state.last_venta_id = venta_id
-                        st.session_state["sale_message"] = ""   # limpiar el campo
+                        st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
 
                         # Invalidar cachés del dashboard
                         get_ventas_por_canal.clear()
@@ -396,6 +406,8 @@ def page_nueva_venta(engine):
                         get_ventas_recientes.clear()
                         get_alertas_stock.clear()
                         get_pedidos_sin_stock.clear()
+                        get_combos_stock_virtual.clear()
+                        get_alertas_pedido.clear()
                         get_kpis.clear()
 
                         st.rerun()
@@ -414,15 +426,34 @@ def page_nueva_venta(engine):
 # ---------------------------------------------------------------------------
 
 def page_dashboard(engine):
-    st.markdown('<div class="section-title">📊 Dashboard de Ventas</div>', unsafe_allow_html=True)
+    # ── Dark theme CSS (solo activo cuando esta página renderiza) ──
+    st.markdown("""
+    <style>
+    .main .block-container { background-color: #0d1b2e !important; }
+    .dash-label {
+        font-size: 10px; color: #6b86a8;
+        text-transform: uppercase; letter-spacing: 1.5px;
+        font-weight: 700; margin-bottom: 6px; margin-top: 2px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # Backing state para fechas (sin colisión con los widgets)
+    # ── Header ──
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:18px;margin-bottom:20px;padding-bottom:14px;
+                border-bottom:1px solid #162a47">
+        <div style="font-size:28px;font-weight:900;color:#3498db;letter-spacing:-1px">COL SPORTS</div>
+        <div style="font-size:10px;color:#6b86a8;text-transform:uppercase;letter-spacing:2.5px;
+                    border-left:2px solid #162a47;padding-left:16px">ANALYTICS DASHBOARD</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Selector de período ──
     if "_dash_start" not in st.session_state:
         st.session_state["_dash_start"] = date.today() - timedelta(days=29)
     if "_dash_end" not in st.session_state:
         st.session_state["_dash_end"] = date.today()
 
-    # Filtro de fechas
     col_d1, col_d2, col_d3 = st.columns([1, 1, 3])
     with col_d1:
         start_date = st.date_input("Desde", value=st.session_state["_dash_start"])
@@ -430,70 +461,98 @@ def page_dashboard(engine):
     with col_d2:
         end_date = st.date_input("Hasta", value=st.session_state["_dash_end"])
         st.session_state["_dash_end"] = end_date
-
     with col_d3:
-        quick_cols = st.columns(4)
-        periods = [("Hoy", 0), ("7 días", 6), ("30 días", 29), ("90 días", 89)]
-        for i, (label, delta) in enumerate(periods):
-            if quick_cols[i].button(label, key=f"period_{delta}"):
+        qc = st.columns(4)
+        for i, (lbl, delta) in enumerate([("Hoy", 0), ("7 días", 6), ("30 días", 29), ("90 días", 89)]):
+            if qc[i].button(lbl, key=f"period_{delta}"):
                 st.session_state["_dash_start"] = date.today() - timedelta(days=delta)
                 st.session_state["_dash_end"] = date.today()
                 st.rerun()
 
-    st.divider()
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    # ── KPIs ──
-    kpis = get_kpis(engine)
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    kpi_data = [
-        (k1, "Ventas hoy",    str(kpis["hoy"]["count"]),    "", "#3498db"),
-        (k2, "Bruto hoy",     fmt_cop(kpis["hoy"]["bruto"]), "", "#27ae60"),
-        (k3, "Neto hoy",      fmt_cop(kpis["hoy"]["neto"]),  "", "#2ecc71"),
-        (k4, "Ventas mes",    str(kpis["mes"]["count"]),     "", "#3498db"),
-        (k5, "Bruto mes",     fmt_cop(kpis["mes"]["bruto"]), "", "#27ae60"),
-        (k6, "Neto mes",      fmt_cop(kpis["mes"]["neto"]),
-             f"Comisiones: {fmt_cop(kpis['mes']['comisiones'])}", "#2ecc71"),
-    ]
-    for col, label, value, sub, color in kpi_data:
-        col.markdown(kpi_card(label, value, sub, color), unsafe_allow_html=True)
+    # ── Carga de datos ──
+    kpis       = get_kpis(engine)
+    kpis_comp  = get_kpis_compras(engine)
+    df_canal   = get_ventas_por_canal(engine, start_date, end_date)
+    df_tend    = get_tendencia_diaria(engine, start_date, end_date)
+    df_top     = get_top_productos(engine)
+    df_horas   = get_ventas_hora_canal(engine, start_date, end_date)
+    df_sun     = get_inventario_sunburst(engine)
+    df_alertas = get_alertas_stock(engine)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    ventas_neto  = kpis["mes"]["neto"]
+    costo_mes    = kpis_comp["mes"]["total"]
+    comisiones   = kpis["mes"]["comisiones"]
+    margen_mes   = ventas_neto - costo_mes
+    pct_margen   = round(margen_mes / ventas_neto * 100, 1) if ventas_neto > 0 else 0.0
+    n_alertas    = len(df_alertas)
+    alert_color  = "#e74c3c" if n_alertas > 0 else "#607d8b"
 
-    # ── Gráficos fila 1: tendencia + canal ──
-    gc1, gc2 = st.columns([2, 1], gap="large")
+    # ── 4 KPI cards ──
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(kpi_card(
+        "Ventas del Mes", fmt_cop(ventas_neto),
+        f"{kpis['mes']['count']} órdenes este mes", "#3498db",
+    ), unsafe_allow_html=True)
+    k2.markdown(kpi_card(
+        "Inversión en Compras", fmt_cop(costo_mes),
+        f"{kpis_comp['mes']['count']} órdenes de compra", "#607d8b",
+    ), unsafe_allow_html=True)
+    k3.markdown(kpi_card(
+        "Margen Estimado", f"{pct_margen}%",
+        fmt_cop(margen_mes), "#2ecc71" if pct_margen >= 0 else "#e74c3c",
+    ), unsafe_allow_html=True)
+    k4.markdown(kpi_card(
+        "Alertas de Stock", str(n_alertas),
+        "productos por reabastecer", alert_color,
+    ), unsafe_allow_html=True)
 
-    df_tend = get_tendencia_diaria(engine, start_date, end_date)
-    with gc1:
-        st.markdown("**Tendencia diaria**")
-        st.plotly_chart(chart_tendencia(df_tend), use_container_width=True)
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    df_canal = get_ventas_por_canal(engine, start_date, end_date)
-    with gc2:
-        st.markdown("**Ventas por canal**")
+    def _label(text: str):
+        st.markdown(f"<div class='dash-label'>{text}</div>", unsafe_allow_html=True)
+
+    # ── Fila 1: Sankey | Waterfall ──
+    r1a, r1b = st.columns([55, 45], gap="medium")
+    with r1a:
+        _label("Flujo de Capital — Período Seleccionado")
+        st.plotly_chart(
+            chart_sankey(df_canal, ventas_neto, costo_mes, comisiones),
+            use_container_width=True,
+        )
+    with r1b:
+        _label("Cierre del Mes Actual")
+        st.plotly_chart(
+            chart_waterfall(ventas_neto, costo_mes, comisiones),
+            use_container_width=True,
+        )
+
+    # ── Fila 2: Heatmap full width ──
+    _label("Actividad de Ventas — Hora y Día de la Semana")
+    st.plotly_chart(chart_heatmap(df_horas), use_container_width=True)
+
+    # ── Fila 3: Canal donut | Top productos ──
+    r3a, r3b = st.columns([2, 3], gap="medium")
+    with r3a:
+        _label("Distribución por Canal")
         st.plotly_chart(chart_ventas_canal(df_canal), use_container_width=True)
-
-    # ── Gráficos fila 2: top productos + facturadores ──
-    gp1, gp2 = st.columns([1, 1], gap="large")
-
-    df_top = get_top_productos(engine)
-    with gp1:
-        st.markdown("**🔥 Top 10 productos más vendidos**")
+    with r3b:
+        _label("Top 10 Productos Más Vendidos")
         st.plotly_chart(chart_top_productos(df_top), use_container_width=True)
 
-    df_fac = get_top_facturadores(engine)
-    with gp2:
-        st.markdown("**💳 Ingresos por método de pago**")
-        if df_fac.empty:
-            st.info("Sin datos.")
-        else:
-            df_fac_display = df_fac.copy()
-            df_fac_display["Total"] = df_fac_display["Total"].apply(fmt_cop)
-            df_fac_display.columns = ["Método de pago", "# Ventas", "Total recaudado"]
-            st.dataframe(df_fac_display, use_container_width=True, hide_index=True)
+    # ── Fila 4: Sunburst | Tendencia diaria ──
+    r4a, r4b = st.columns([2, 3], gap="medium")
+    with r4a:
+        _label("Distribución de Inventario Activo")
+        st.plotly_chart(chart_sunburst(df_sun), use_container_width=True)
+    with r4b:
+        _label("Tendencia Diaria de Ingresos")
+        st.plotly_chart(chart_tendencia(df_tend), use_container_width=True)
 
-    # ── Tabla de ventas recientes ──
-    st.markdown("**Ventas recientes**")
-    df_rec = get_ventas_recientes(engine)
+    # ── Ventas recientes ──
+    _label("Últimas Ventas")
+    df_rec = get_ventas_recientes(engine, limit=10)
     if df_rec.empty:
         st.info("No hay ventas registradas aún.")
     else:
@@ -508,8 +567,8 @@ def page_inventario(engine):
     st.markdown('<div class="section-title">📦 Inventario y Alertas</div>',
                 unsafe_allow_html=True)
 
-    tab_inv, tab_alertas, tab_hot = st.tabs(
-        ["📋 Catálogo", "🚨 Alertas de stock", "🔥 Hot Products"]
+    tab_inv, tab_alertas, tab_combos, tab_hot = st.tabs(
+        ["📋 Catálogo", "🚨 Alertas de stock", "🧩 Combos", "🔥 Hot Products"]
     )
 
     # ── Tab 1: Catálogo completo ──
@@ -583,7 +642,63 @@ def page_inventario(engine):
         else:
             st.dataframe(df_sin, use_container_width=True, hide_index=True)
 
-    # ── Tab 3: Hot Products ──
+    # ── Tab 3: Combos ──
+    with tab_combos:
+        st.markdown("#### 🧩 Stock Virtual de Combos")
+        st.caption(
+            "El stock virtual es cuántas unidades del combo se podrían armar "
+            "con el stock actual de cada componente. El cuello de botella es el "
+            "componente más escaso."
+        )
+        df_combos = get_combos_stock_virtual(engine)
+        if df_combos.empty:
+            st.info(
+                "No hay combos registrados aún. "
+                "Agrega filas en la tabla **combo_componentes** para que aparezcan aquí."
+            )
+        else:
+            def _style_combo_stock(val):
+                if val <= 0:
+                    return "background-color:#fde8e8;color:#c0392b;font-weight:700"
+                if val <= 3:
+                    return "background-color:#fef9e7;color:#d35400;font-weight:600"
+                return "background-color:#eafaf1;color:#1e8449"
+
+            styled_combos = df_combos.style.applymap(_style_combo_stock, subset=["Stock Virtual"])
+            st.dataframe(styled_combos, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("#### ⚠️ Alertas de componentes faltantes en combos")
+        mostrar_resueltas = st.checkbox("Incluir alertas ya resueltas", key="chk_resueltas")
+        df_alertas = get_alertas_pedido(engine, solo_pendientes=not mostrar_resueltas)
+
+        if df_alertas.empty:
+            st.success("No hay alertas de componentes pendientes.")
+        else:
+            for _, row in df_alertas.iterrows():
+                resuelta = bool(row["Resuelta"])
+                color = "#eafaf1" if resuelta else "#fde8e8"
+                borde = "#27ae60" if resuelta else "#e74c3c"
+                estado_txt = "✅ Resuelta" if resuelta else "🔴 Pendiente"
+                col_info, col_btn = st.columns([5, 1])
+                with col_info:
+                    st.markdown(
+                        f'<div class="alert-item" style="background:{color};border-color:{borde}">'
+                        f'<b>Combo:</b> {row["Combo SKU"]} &nbsp;|&nbsp; '
+                        f'<b>Faltante:</b> {row["Componente"]} × {row["Faltante"]} und '
+                        f'&nbsp;|&nbsp; <b>Venta:</b> #{row["Venta ID"]} '
+                        f'&nbsp;|&nbsp; {estado_txt}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col_btn:
+                    if not resuelta:
+                        if st.button("Resolver", key=f"resolve_{row['ID']}"):
+                            marcar_alerta_resuelta(engine, int(row["ID"]))
+                            get_alertas_pedido.clear()
+                            st.rerun()
+
+    # ── Tab 4: Hot Products ──
     with tab_hot:
         st.markdown("**Top 5 productos más vendidos (todas las ventas)**")
         df_hot = get_top_productos(engine, limit=5)
@@ -596,6 +711,236 @@ def page_inventario(engine):
                 c1.markdown(f"{medal} **{row['Producto'][:50]}**")
                 c2.metric("Unidades", int(row["Unidades"]))
                 c3.metric("Ingresos", fmt_cop(row["Ingresos"]))
+
+
+# ---------------------------------------------------------------------------
+# PÁGINA: COMPRAS E INGRESO DE MERCANCÍA
+# ---------------------------------------------------------------------------
+
+def page_compras(engine):
+    st.markdown('<div class="section-title">🛒 Compras e Ingreso de Mercancía</div>',
+                unsafe_allow_html=True)
+
+    # Versión del textarea: incrementar limpia el campo de forma garantizada
+    if "purchase_msg_v" not in st.session_state:
+        st.session_state["purchase_msg_v"] = 0
+    purchase_key = f"purchase_msg_{st.session_state['purchase_msg_v']}"
+
+    tab_nueva, tab_historial = st.tabs(["📥 Nueva Compra", "📋 Historial"])
+
+    # ── Tab 1: Nueva compra ──
+    with tab_nueva:
+        col_left, col_right = st.columns([1, 1.3], gap="large")
+
+        with col_left:
+            st.markdown("**Pega aquí el mensaje del proveedor o lista de productos**")
+            st.text_area(
+                "",
+                placeholder=(
+                    "Ejemplo:\n"
+                    "IMN Colombia\n"
+                    "12 Creatina 133 serv 550g - $75.000 c/u\n"
+                    "6 Whey Protein 2lb vainilla - $95.000\n"
+                    "4 Pre-entreno 30 serv - $58.000"
+                ),
+                height=240,
+                key=purchase_key,
+                label_visibility="collapsed",
+            )
+
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                analizar_btn = st.button(
+                    "🔍 Analizar Compra", type="primary",
+                    use_container_width=True, key="btn_analizar_compra"
+                )
+            with c2:
+                if st.button("🗑️", use_container_width=True, key="btn_limpiar_compra",
+                             help="Limpiar"):
+                    for k in ["parsed_compra", "compra_guardada", "last_compra_id"]:
+                        st.session_state.pop(k, None)
+                    st.session_state["purchase_msg_v"] += 1
+                    st.rerun()
+
+            if analizar_btn:
+                msg = st.session_state.get(purchase_key, "").strip()
+                if not msg:
+                    st.warning("Pega un mensaje antes de analizar.")
+                else:
+                    with st.spinner("Procesando con IA..."):
+                        try:
+                            from api.purchase_parser import parsear_compra
+                            compra_parsed = parsear_compra(msg)
+                            st.session_state["parsed_compra"] = compra_parsed
+                            st.session_state.pop("compra_guardada", None)
+                            st.session_state.pop("last_compra_id", None)
+                        except Exception as e:
+                            st.error(f"Error al analizar: {e}")
+
+        with col_right:
+            # Estado: compra ya guardada — sin return, usando if/elif/else
+            if st.session_state.get("compra_guardada") and st.session_state.get("last_compra_id"):
+                st.success(
+                    f"✅ Compra **#{st.session_state['last_compra_id']}** "
+                    "ingresada y stock actualizado."
+                )
+                if st.button("➕ Registrar otra compra", type="primary",
+                             use_container_width=True):
+                    for k in ["parsed_compra", "compra_guardada", "last_compra_id"]:
+                        st.session_state.pop(k, None)
+                    st.session_state["purchase_msg_v"] += 1
+                    st.rerun()
+
+            elif st.session_state.get("parsed_compra") is None:
+                st.markdown(
+                    "<div style='background:#f8f9fa;border-radius:10px;padding:40px;"
+                    "text-align:center;color:#95a5a6'>"
+                    "<div style='font-size:36px'>👈</div>"
+                    "<div style='margin-top:8px'>La tabla de revisión aparecerá aquí<br>"
+                    "después de analizar el mensaje</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+            else:
+                compra_parsed = st.session_state["parsed_compra"]
+
+                # Proveedor editable
+                proveedor = st.text_input(
+                    "Proveedor", value=compra_parsed.proveedor or "",
+                    key="compra_proveedor", placeholder="Nombre del proveedor"
+                )
+
+                # Catálogo para sugerir SKUs
+                catalogo = get_catalogo_skus(engine)
+                skus_disponibles = [""] + [f"{p['sku']} — {p['nombre']}" for p in catalogo]
+                sku_map = {"": None}
+                for p in catalogo:
+                    sku_map[f"{p['sku']} — {p['nombre']}"] = p["sku"]
+
+                # DataFrame inicial con SKU sugerido por F1-score
+                from api.guardar_venta import _buscar_sku
+                from sqlalchemy.orm import Session as DBSession
+                from models import Producto as ProdModel
+                from sqlalchemy import select as sql_select
+
+                with DBSession(engine) as s:
+                    productos_catalogo = s.execute(sql_select(ProdModel)).scalars().all()
+
+                rows_editor = []
+                for item in compra_parsed.items:
+                    sku_sugerido = _buscar_sku(productos_catalogo, item.producto_nombre_raw)
+                    sku_display = ""
+                    if sku_sugerido:
+                        match = next((p for p in catalogo if p["sku"] == sku_sugerido), None)
+                        if match:
+                            sku_display = f"{match['sku']} — {match['nombre']}"
+                    rows_editor.append({
+                        "Producto (del proveedor)": item.producto_nombre_raw,
+                        "SKU en catálogo": sku_display,
+                        "Cantidad": item.cantidad,
+                        "Costo unitario (COP)": item.precio_costo_unitario,
+                    })
+
+                import pandas as pd
+                df_edit = pd.DataFrame(rows_editor)
+
+                st.markdown("**Revisar y ajustar productos detectados**")
+                st.caption("Edita el SKU, cantidad o costo antes de confirmar. "
+                           "Solo se suma stock a los productos con SKU asignado.")
+
+                df_resultado = st.data_editor(
+                    df_edit,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="dynamic",
+                    key="editor_compra",
+                    column_config={
+                        "Producto (del proveedor)": st.column_config.TextColumn(
+                            "Producto (del proveedor)", width="large"
+                        ),
+                        "SKU en catálogo": st.column_config.SelectboxColumn(
+                            "SKU en catálogo",
+                            options=skus_disponibles,
+                            width="large",
+                        ),
+                        "Cantidad": st.column_config.NumberColumn(
+                            "Cantidad", min_value=1, step=1, width="small"
+                        ),
+                        "Costo unitario (COP)": st.column_config.NumberColumn(
+                            "Costo unitario (COP)", min_value=0, step=1000, width="medium",
+                            format="$ %d"
+                        ),
+                    },
+                )
+
+                # Total estimado
+                try:
+                    total_est = int(
+                        (df_resultado["Cantidad"] * df_resultado["Costo unitario (COP)"].fillna(0)).sum()
+                    )
+                    total_fmt = f"${total_est:,}".replace(",", ".")
+                    st.markdown(
+                        f"<div style='text-align:right;font-size:15px;color:#2c3e50'>"
+                        f"<b>Total estimado:</b> "
+                        f"<span style='color:#3498db;font-weight:700'>{total_fmt}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                except Exception:
+                    pass
+
+                st.divider()
+
+                if st.button(
+                    "✅ Confirmar e Ingresar a Inventario",
+                    type="primary",
+                    use_container_width=True,
+                    key="btn_confirmar_compra",
+                ):
+                    with st.spinner("Guardando compra y actualizando stock..."):
+                        try:
+                            df_save = df_resultado.copy()
+                            df_save["sku"] = df_save["SKU en catálogo"].map(
+                                lambda v: sku_map.get(v, None)
+                            )
+                            df_save = df_save.rename(columns={
+                                "Producto (del proveedor)": "producto_nombre_raw",
+                                "Cantidad": "cantidad",
+                                "Costo unitario (COP)": "precio_costo_unitario",
+                            })[["producto_nombre_raw", "sku", "cantidad", "precio_costo_unitario"]]
+
+                            from sqlalchemy.orm import Session as DBSession2
+                            from api.guardar_compra import guardar_compra
+                            with DBSession2(engine) as session:
+                                compra_obj = guardar_compra(
+                                    session, proveedor or None, df_save
+                                )
+                                session.commit()
+                                compra_id = compra_obj.id
+
+                            st.session_state["compra_guardada"] = True
+                            st.session_state["last_compra_id"] = compra_id
+                            st.session_state["purchase_msg_v"] += 1
+
+                            get_inventario.clear()
+                            get_alertas_stock.clear()
+                            get_pedidos_sin_stock.clear()
+                            get_combos_stock_virtual.clear()
+                            get_compras_recientes.clear()
+                            get_kpis.clear()
+
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al guardar: {e}")
+
+    # ── Tab 2: Historial ── (siempre se renderiza, sin return previo)
+    with tab_historial:
+        st.markdown("**Últimas 20 compras registradas**")
+        df_hist = get_compras_recientes(engine)
+        if df_hist.empty:
+            st.info("No hay compras registradas aún.")
+        else:
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +964,8 @@ def main():
         page_dashboard(engine)
     elif page == "inventario":
         page_inventario(engine)
+    elif page == "compras":
+        page_compras(engine)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,10 @@ from .venta_item import VentaItem
 from .pago import Pago
 from .envio import Envio
 from .rappi_detalle import RappiDetalle
+from .combo_componente import ComboComponente
+from .alerta_pedido import AlertaPedido
+from .compra import Compra
+from .detalle_compra import DetalleCompra
 
 __all__ = [
     "Base",
@@ -19,4 +23,8 @@ __all__ = [
     "Pago",
     "Envio",
     "RappiDetalle",
+    "ComboComponente",
+    "AlertaPedido",
+    "Compra",
+    "DetalleCompra",
 ]
