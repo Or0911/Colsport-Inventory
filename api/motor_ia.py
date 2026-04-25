@@ -1,15 +1,15 @@
 """
 motor_ia.py
 ===========
-Transforma un mensaje de WhatsApp en un objeto Python estructurado (VentaParseada).
+Transforms a WhatsApp message into a structured Python object (ParsedSale).
 
-Flujo:
-    texto crudo  →  normalizar_texto_venta()  →  OpenAI GPT-4o-mini  →  JSON validado  →  VentaParseada
+Flow:
+    raw text  →  normalize_sale_text()  →  OpenAI GPT-4o-mini  →  validated JSON  →  ParsedSale
 
-El modelo solo EXTRAE campos. Todos los cálculos (subtotal, comisión, total)
-se realizan en Python mediante calcular_montos(). El LLM nunca hace aritmética.
+The model only EXTRACTS fields. All calculations (subtotal, commission, total)
+are done in Python via calculate_amounts(). The LLM never performs arithmetic.
 
-Este módulo NO toca la base de datos. Solo parsea y expone utilidades de cálculo.
+This module does NOT touch the database.
 """
 
 import os
@@ -27,156 +27,156 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Modelos Pydantic — representan campos EXTRAÍDOS del mensaje (no calculados)
+# Pydantic models — represent EXTRACTED fields from the message (not calculated)
+# Note: field names stay in Spanish because they match the JSON keys the LLM returns.
 # ---------------------------------------------------------------------------
 
-class ClienteData(BaseModel):
-    """Datos del comprador extraídos del mensaje."""
+class CustomerData(BaseModel):
+    """Buyer data extracted from the message."""
     nombre: str
     cedula: Optional[str] = None
     telefono: Optional[str] = None
     email: Optional[str] = None
 
 
-class ItemData(BaseModel):
-    """Un producto dentro de la venta."""
+class SaleItemData(BaseModel):
+    """A single product line within the sale."""
     producto_nombre_raw: str = Field(
-        description="Nombre del producto exactamente como aparece en el mensaje"
+        description="Product name exactly as it appears in the message"
     )
     cantidad: int = Field(default=1, ge=1)
     precio_unitario: Optional[int] = Field(
         default=None,
-        description="Precio por unidad en COP (entero). None si no aparece por separado en el mensaje."
+        description="Unit price in COP (integer). None if not explicitly listed per product."
     )
 
 
-class EnvioData(BaseModel):
-    """Datos de entrega. Solo aplica para ventas que requieren despacho."""
+class ShippingData(BaseModel):
+    """Delivery details. Only applies to sales that require dispatch."""
     direccion: Optional[str] = None
     ciudad: Optional[str] = None
     departamento: Optional[str] = None
     codigo_postal: Optional[str] = None
 
 
-class PagoData(BaseModel):
-    """Método de pago usado en la venta."""
+class PaymentData(BaseModel):
+    """Payment method used in the sale."""
     metodo: Optional[str] = Field(default="Sin especificar")
     cuenta_destino: Optional[str] = None
     referencia: Optional[str] = None
 
     @field_validator("metodo", mode="before")
     @classmethod
-    def metodo_no_nulo(cls, v):
+    def payment_method_not_null(cls, v):
         return v if v else "Sin especificar"
 
 
-class RappiDetalleData(BaseModel):
-    """Información exclusiva de pedidos Rappi / Rappi Pro."""
-    order_id: Optional[str] = Field(default=None, description="ID numérico del pedido Rappi")
-    tipo: Optional[str] = Field(default=None, description="'Regular' o 'Pro'")
+class RappiDetailData(BaseModel):
+    """Data exclusive to Rappi / Rappi Pro orders."""
+    order_id: Optional[str] = Field(default=None, description="Rappi numeric order ID")
+    tipo: Optional[str] = Field(default=None, description="'Regular' or 'Pro'")
     comision_porcentaje: Optional[float] = Field(
         default=None,
-        description="Porcentaje de comisión cobrado por Rappi (ej: 16.0). Solo el porcentaje, no el monto."
+        description="Commission percentage charged by Rappi (e.g. 16.0). Percentage only, not the amount."
     )
 
 
-class VentaParseada(BaseModel):
+class ParsedSale(BaseModel):
     """
-    Representación completa de una venta extraída del mensaje.
+    Complete representation of a sale extracted from the message.
 
-    Solo contiene datos EXTRAÍDOS del texto. Los montos calculados
-    (subtotal, descuento, total) se obtienen mediante calcular_montos().
+    Contains only EXTRACTED data. Calculated amounts (subtotal, discount, total)
+    are obtained via calculate_amounts().
     """
     canal: str
-    cliente: Optional[ClienteData] = None
-    items: List[ItemData]
+    cliente: Optional[CustomerData] = None
+    items: List[SaleItemData]
     costo_envio: Optional[int] = Field(
         default=None,
-        description="Costo de envío en COP extraído del mensaje. None si no se menciona."
+        description="Shipping cost in COP extracted from the message. None if not mentioned."
     )
     total_declarado: Optional[int] = Field(
         default=None,
-        description="Total general mencionado en el mensaje cuando no hay precios por item. Ej: '$338.000' con 2 productos sin desglose."
+        description="Overall total stated in the message when no per-item prices exist."
     )
-    pago: PagoData
-    envio: Optional[EnvioData] = None
-    rappi_detalle: Optional[RappiDetalleData] = None
+    pago: PaymentData
+    envio: Optional[ShippingData] = None
+    rappi_detalle: Optional[RappiDetailData] = None
     fuente_referido: Optional[str] = None
     notas: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# Cálculos de dinero en Python (la aritmética nunca la hace el LLM)
+# Money calculations in Python (the LLM never does arithmetic)
 # ---------------------------------------------------------------------------
 
-def calcular_montos(venta: VentaParseada) -> dict:
+def calculate_amounts(sale: ParsedSale) -> dict:
     """
-    Calcula subtotal, comisión, descuento y total desde los datos extraídos.
+    Computes subtotal, commission, discount, and total from extracted data.
 
-    Si los items no tienen precio_unitario pero hay un total_declarado en el mensaje,
-    usa ese valor como subtotal (caso: un precio global para múltiples productos).
+    If items have no unit price but the message declares an overall total,
+    that value is used as the subtotal.
 
     Returns:
-        dict con claves: subtotal, costo_envio, comision_monto, descuento, total
+        dict with keys: subtotal, costo_envio, comision_monto, descuento, total
     """
-    subtotal_calculado = sum(
+    calculated_subtotal = sum(
         (item.precio_unitario or 0) * item.cantidad
-        for item in venta.items
+        for item in sale.items
     )
 
-    # Si no se pudo calcular desde items pero el mensaje declara un total, usarlo
-    subtotal = subtotal_calculado if subtotal_calculado > 0 else (venta.total_declarado or 0)
+    subtotal = calculated_subtotal if calculated_subtotal > 0 else (sale.total_declarado or 0)
+    shipping = sale.costo_envio or 0
+    commission = 0
 
-    costo_envio = venta.costo_envio or 0
-    comision_monto = 0
+    if sale.rappi_detalle and sale.rappi_detalle.comision_porcentaje:
+        commission = round(subtotal * sale.rappi_detalle.comision_porcentaje / 100)
 
-    if venta.rappi_detalle and venta.rappi_detalle.comision_porcentaje:
-        comision_monto = round(subtotal * venta.rappi_detalle.comision_porcentaje / 100)
-
-    descuento = comision_monto
-    total = subtotal + costo_envio - descuento
+    discount = commission
+    total = subtotal + shipping - discount
 
     return {
         "subtotal": subtotal,
-        "costo_envio": costo_envio,
-        "comision_monto": comision_monto,
-        "descuento": descuento,
+        "costo_envio": shipping,
+        "comision_monto": commission,
+        "descuento": discount,
         "total": total,
     }
 
 
 # ---------------------------------------------------------------------------
-# Normalización del texto antes de enviar al modelo
+# Text normalization before sending to the model
 # ---------------------------------------------------------------------------
 
-def normalizar_texto_venta(texto: str) -> str:
+def normalize_sale_text(text: str) -> str:
     """
-    Limpia el mensaje antes de enviarlo al LLM:
-    - Colapsa espacios múltiples en la misma línea
-    - Elimina líneas vacías repetidas consecutivas (max 1 línea vacía)
-    - Quita espacios al inicio/fin de cada línea
-    - Preserva toda la información relevante del mensaje
+    Cleans the message before sending to the LLM:
+    - Collapses multiple spaces on the same line
+    - Removes repeated consecutive blank lines (max 1 blank line)
+    - Strips leading/trailing spaces from each line
+    - Preserves all relevant message information
     """
-    texto = re.sub(r"[ \t]+", " ", texto)
-    lineas = texto.splitlines()
-    lineas = [l.strip() for l in lineas]
+    text = re.sub(r"[ \t]+", " ", text)
+    lines = [line.strip() for line in text.splitlines()]
 
-    resultado: list[str] = []
-    linea_vacia_previa = False
-    for linea in lineas:
-        if linea == "":
-            if not linea_vacia_previa:
-                resultado.append(linea)
-            linea_vacia_previa = True
+    output_lines: list[str] = []
+    prev_blank = False
+    for line in lines:
+        if line == "":
+            if not prev_blank:
+                output_lines.append(line)
+            prev_blank = True
         else:
-            resultado.append(linea)
-            linea_vacia_previa = False
+            output_lines.append(line)
+            prev_blank = False
 
-    return "\n".join(resultado).strip()
+    return "\n".join(output_lines).strip()
 
 
 # ---------------------------------------------------------------------------
-# Prompt del sistema — solo extracción, sin instrucciones de cálculo
+# System prompt — extraction only, no arithmetic instructions
+# Spanish is intentional: the LLM must return JSON keys in Spanish to match
+# the Pydantic schema.
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """
@@ -213,7 +213,6 @@ REGLAS DE EXTRACCIÓN:
    - Si el precio no aparece junto al producto → precio_unitario=null
    - Si hay un total general sin desglose por item → precio_unitario=null en todos los items
    - "1 par Mancuernas 5kg" → producto_nombre_raw="Mancuerna 5kg x2", cantidad=1
-     (un "par" = presentación x2; estandariza el nombre con "x2" para facilitar búsqueda en catálogo)
 
 4. CLIENTE: En ventas locales puede haber solo el nombre. Crea objeto cliente solo con nombre.
    Si no hay ningún dato de cliente, cliente=null.
@@ -221,107 +220,77 @@ REGLAS DE EXTRACCIÓN:
 5. CEDULA: Número que aparece solo después del nombre. Típicamente 8-10 dígitos.
    No confundir con teléfono (10 dígitos empezando en 3 o 6).
 
-6. FUENTE_REFERIDO: Si el cliente menciona cómo conoció el negocio → extrae solo la fuente puntual (ej: "covoley", "Instagram", "TikTok"). No copies la frase completa.
+6. FUENTE_REFERIDO: Si el cliente menciona cómo conoció el negocio → extrae solo la fuente puntual (ej: "covoley", "Instagram", "TikTok").
 
-11. PAGO PARCIAL / ABONO: Si el mensaje indica que el cliente abona una parte y queda un saldo pendiente, captura esa información en notas. Ejemplo: "abona $65.500 / pendiente por pagar $65.500". El precio_unitario y total_declarado reflejan el valor total del producto, no el abono.
+11. PAGO PARCIAL / ABONO: Si el mensaje indica que el cliente abona una parte y queda un saldo pendiente, captura esa información en notas.
 
 9. TELÉFONOS MÚLTIPLES: Identifica TODOS los números de teléfono del mensaje (10 dígitos, empiezan en 3 o 6).
    - El primero va en cliente.telefono (sin espacios ni guiones).
    - Los demás van en notas, uno por línea: "Teléfono adicional: XXXXXXXXXX".
-   - Si notas ya tiene otro texto (ej: receptor), concaténalos separados por " | ".
-   Ejemplo: "301 4083472 - 3158305413" → telefono="3014083472", notas contiene "Teléfono adicional: 3158305413".
 
-10. RECEPTOR DIFERENTE AL COMPRADOR: Si el mensaje indica que quien recibe el pedido es otra persona distinta al comprador (ej: "Recibe: Richar Vásquez"), agrégalo en notas (ej: "Recibe: Richar Vásquez").
+10. RECEPTOR DIFERENTE AL COMPRADOR: Si el mensaje indica que quien recibe el pedido es otra persona, agrégalo en notas.
 
 7. PAGO:
    - "Bancolombia Colsports Colombia" → metodo="Transferencia Bancolombia", cuenta_destino="Colsports Colombia"
    - "nequi JR" → metodo="Nequi", cuenta_destino="JR"
    - "efectivo" → metodo="Efectivo", cuenta_destino=null
    - "Contra entrega Rappi" → metodo="Contra entrega Rappi", cuenta_destino=null
-   - "transferencia", "Transferencia", "pago por transferencia" o cualquier variante sin banco específico → metodo="Transferencia Bancolombia", cuenta_destino=null
-     IMPORTANTE: La palabra "Transferencia" sola SIEMPRE se convierte en "Transferencia Bancolombia".
-   - "tarjeta de crédito bold" o "tarjeta bold" → metodo="Tarjeta de crédito", cuenta_destino="Bold"
-   - "tarjeta de crédito" sin terminal → metodo="Tarjeta de crédito", cuenta_destino=null
+   - "transferencia" sola → metodo="Transferencia Bancolombia", cuenta_destino=null
+   - "tarjeta bold" → metodo="Tarjeta de crédito", cuenta_destino="Bold"
 
-8. DIRECCIÓN: Separar campos cuando sea posible.
+8. DIRECCIÓN:
    "Dosquebradas, Risaralda" → ciudad="Dosquebradas", departamento="Risaralda"
-   Si hay ciudad o dirección pero no se menciona departamento → departamento="Antioquia" (valor por defecto del negocio).
-   Si NO hay dirección NI ciudad en el mensaje → envio=null (objeto completo en null, no un objeto con campos null).
-   NUNCA pongas el string "null" como valor — usa null (JSON null) si realmente no hay dato.
+   Si NO hay dirección NI ciudad → envio=null.
+   NUNCA pongas el string "null" como valor — usa null (JSON null).
 
 ESTRUCTURA EXACTA DEL JSON (respeta estos nombres de campo sin excepción):
 
 {
   "canal": "TikTok Live",
-  "cliente": {
-    "nombre": "Nombre completo",
-    "cedula": "1050277346",
-    "telefono": "3016986941",
-    "email": "correo@gmail.com"
-  },
-  "items": [
-    {
-      "producto_nombre_raw": "Creatina IN 60 serv",
-      "cantidad": 1,
-      "precio_unitario": 80000
-    }
-  ],
+  "cliente": {"nombre": "Nombre completo", "cedula": "1050277346", "telefono": "3016986941", "email": null},
+  "items": [{"producto_nombre_raw": "Creatina IN 60 serv", "cantidad": 1, "precio_unitario": 80000}],
   "costo_envio": 5000,
   "total_declarado": null,
-  "pago": {
-    "metodo": "Nequi",
-    "cuenta_destino": "JR",
-    "referencia": null
-  },
-  "envio": {
-    "direccion": "calle 28 kr 63A casa",
-    "ciudad": "El Carmen de Bolívar",
-    "departamento": "Bolívar",
-    "codigo_postal": null
-  },
-  "rappi_detalle": {
-    "order_id": "2449862303",
-    "tipo": "Pro",
-    "comision_porcentaje": 16.0
-  },
+  "pago": {"metodo": "Nequi", "cuenta_destino": "JR", "referencia": null},
+  "envio": {"direccion": "calle 28 kr 63A", "ciudad": "El Carmen de Bolívar", "departamento": "Bolívar", "codigo_postal": null},
+  "rappi_detalle": {"order_id": "2449862303", "tipo": "Pro", "comision_porcentaje": 16.0},
   "fuente_referido": "TikTok",
   "notas": null
 }
 
-IMPORTANTE:
-- Si hay un precio total general sin desglose por producto (ej: "$338.000" para 2 items), ponlo en "total_declarado" y deja precio_unitario de cada item en null
-- Si hay precios individuales por producto, ponlos en precio_unitario de cada item y deja total_declarado en null
-- cedula, telefono y email van DENTRO del objeto "cliente", nunca en la raíz
-- Los productos van en "items" (no "productos"), con el campo "producto_nombre_raw" (no "nombre_producto")
-- El método de pago va en "pago" (no "metodo_pago")
-- La dirección va dentro de "envio" (no "direccion" en la raíz)
-- Responde ÚNICAMENTE con el JSON. Sin texto adicional.
+Responde ÚNICAMENTE con el JSON. Sin texto adicional.
 """
 
 
 # ---------------------------------------------------------------------------
-# Función principal
+# Main function
 # ---------------------------------------------------------------------------
 
-def parsear_mensaje(texto: str) -> VentaParseada:
+def parse_sale_message(text: str) -> ParsedSale:
     """
-    Normaliza y parsea un mensaje de WhatsApp → VentaParseada.
+    Normalizes and parses a WhatsApp message into a ParsedSale object.
 
     Args:
-        texto: El mensaje tal como llega por WhatsApp (sin procesar).
+        text: The raw message as received from WhatsApp.
 
     Returns:
-        VentaParseada con los campos extraídos y validados por Pydantic.
+        ParsedSale with extracted and Pydantic-validated fields.
 
     Raises:
-        ValueError: Si el JSON retornado es inválido o no cumple el schema.
-        openai.APIError: Si hay un error de comunicación con la API.
+        ValueError: If the returned JSON is invalid or fails schema validation.
+        openai.APIError: If there is a communication error with the API.
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY no está definida en el archivo .env")
+        try:
+            import streamlit as st
+            api_key = st.secrets["OPENAI_API_KEY"]
+        except Exception:
+            pass
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not set in .env or st.secrets")
 
-    texto_normalizado = normalizar_texto_venta(texto)
+    normalized_text = normalize_sale_text(text)
 
     client = OpenAI(api_key=api_key)
 
@@ -331,7 +300,7 @@ def parsear_mensaje(texto: str) -> VentaParseada:
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": f"Parsea esta venta:\n\n{texto_normalizado}"},
+            {"role": "user",   "content": f"Parsea esta venta:\n\n{normalized_text}"},
         ],
     )
 
@@ -341,18 +310,32 @@ def parsear_mensaje(texto: str) -> VentaParseada:
         data = json.loads(raw_json)
     except json.JSONDecodeError as e:
         logger.error(
-            "JSON inválido del modelo | error=%s | texto_original_inicio=%r | respuesta_modelo=%s",
-            e, texto[:300], raw_json,
+            "Invalid JSON from model | error=%s | text_preview=%r | response=%s",
+            e, text[:300], raw_json,
         )
-        raise ValueError(f"La IA retornó un JSON inválido: {e}\n\nRespuesta: {raw_json}")
+        raise ValueError(f"AI returned invalid JSON: {e}\n\nResponse: {raw_json}")
 
     try:
-        venta = VentaParseada.model_validate(data)
+        sale = ParsedSale.model_validate(data)
     except Exception as e:
         logger.error(
-            "JSON no cumple el schema | error=%s | texto_original_inicio=%r | json_recibido=%s",
-            e, texto[:300], raw_json,
+            "JSON does not match schema | error=%s | text_preview=%r | json=%s",
+            e, text[:300], raw_json,
         )
-        raise ValueError(f"El JSON no cumple el schema esperado: {e}\n\nJSON recibido: {raw_json}")
+        raise ValueError(f"JSON does not match expected schema: {e}\n\nJSON: {raw_json}")
 
-    return venta
+    return sale
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (used by legacy scripts and tests)
+# ---------------------------------------------------------------------------
+VentaParseada = ParsedSale
+ClienteData = CustomerData
+ItemData = SaleItemData
+EnvioData = ShippingData
+PagoData = PaymentData
+RappiDetalleData = RappiDetailData
+calcular_montos = calculate_amounts
+normalizar_texto_venta = normalize_sale_text
+parsear_mensaje = parse_sale_message

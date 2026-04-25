@@ -116,12 +116,17 @@ footer {visibility: hidden;}
 # Imports de la app (después del page_config)
 # ---------------------------------------------------------------------------
 from app.db_queries import (
-    get_engine, get_kpis, get_ventas_por_canal, get_tendencia_diaria,
-    get_top_productos, get_top_facturadores, get_ventas_recientes,
-    get_inventario, get_alertas_stock, get_pedidos_sin_stock,
-    get_combos_stock_virtual, get_alertas_pedido, marcar_alerta_resuelta,
-    get_compras_recientes, get_catalogo_skus,
-    get_kpis_compras, get_tendencia_compras, get_compras_por_proveedor, get_margen_diario,
+    get_engine, get_kpis,
+    get_sales_by_channel, get_daily_trend, get_top_products,
+    get_top_billers, get_recent_sales,
+    get_inventory, get_stock_alerts, get_orders_without_stock,
+    get_combo_virtual_stock, get_order_alerts, mark_alert_resolved,
+    get_recent_purchases, get_sku_catalog,
+    get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
+    # legacy aliases kept for cache-clear calls
+    get_top_facturadores, get_ventas_recientes, get_alertas_stock,
+    get_pedidos_sin_stock, get_combos_stock_virtual, get_alertas_pedido,
+    get_inventario, get_compras_recientes,
 )
 from app.charts import (
     chart_ventas_canal, chart_tendencia, chart_top_productos,
@@ -234,7 +239,7 @@ def render_sidebar():
 # PÁGINA: NUEVA VENTA
 # ---------------------------------------------------------------------------
 
-def page_nueva_venta(engine):
+def page_new_sale(engine):
     st.markdown('<div class="section-title">📝 Nueva Venta</div>', unsafe_allow_html=True)
 
     # Versión del textarea: incrementar para forzar widget vacío (método garantizado en Streamlit)
@@ -277,9 +282,9 @@ def page_nueva_venta(engine):
             else:
                 with st.spinner("Procesando con IA..."):
                     try:
-                        from api.motor_ia import parsear_mensaje, calcular_montos
-                        venta = parsear_mensaje(msg)
-                        montos = calcular_montos(venta)
+                        from api.motor_ia import parse_sale_message, calculate_amounts
+                        venta = parse_sale_message(msg)
+                        montos = calculate_amounts(venta)
                         st.session_state.parsed_sale = venta
                         st.session_state.sale_montos = montos
                         st.session_state.sale_saved = False
@@ -386,9 +391,9 @@ def page_nueva_venta(engine):
                 with st.spinner("Guardando en base de datos..."):
                     try:
                         from sqlalchemy.orm import Session as DBSession
-                        from api.guardar_venta import guardar_venta
+                        from api.guardar_venta import save_sale
                         with DBSession(engine) as session:
-                            v_guardada = guardar_venta(session, venta, msg)
+                            v_guardada = save_sale(session, venta, msg)
                             session.commit()
                             venta_id = v_guardada.id
 
@@ -467,13 +472,13 @@ def page_dashboard(engine):
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ── Carga de datos ──
+    # ── Load data ──
     kpis      = get_kpis(engine)
-    kpis_comp = get_kpis_compras(engine)
-    df_canal  = get_ventas_por_canal(engine, start_date, end_date)
-    df_tend   = get_tendencia_diaria(engine, start_date, end_date)
-    df_top    = get_top_productos(engine)
-    df_alerr  = get_alertas_stock(engine)
+    kpis_comp = get_purchase_kpis(engine)
+    df_canal  = get_sales_by_channel(engine, start_date, end_date)
+    df_tend   = get_daily_trend(engine, start_date, end_date)
+    df_top    = get_top_products(engine)
+    df_alerr  = get_stock_alerts(engine)
 
     ventas_neto = kpis["mes"]["neto"]
     costo_mes   = kpis_comp["mes"]["total"]
@@ -510,11 +515,11 @@ def page_dashboard(engine):
     def _label(text: str):
         st.markdown(f"<div class='dash-label'>{text}</div>", unsafe_allow_html=True)
 
-    # ── Tendencia diaria — ancho completo ──
+    # ── Daily trend — full width ──
     _label("Tendencia Diaria de Ingresos")
     st.plotly_chart(chart_tendencia(df_tend), use_container_width=True)
 
-    # ── Canal | Top productos ──
+    # ── Channel donut | Top products ──
     r2a, r2b = st.columns(2, gap="medium")
     with r2a:
         _label("Distribución por Canal")
@@ -523,9 +528,9 @@ def page_dashboard(engine):
         _label("Top 10 Productos Más Vendidos")
         st.plotly_chart(chart_top_productos(df_top), use_container_width=True)
 
-    # ── Últimas ventas ──
+    # ── Recent sales table ──
     _label("Últimas Ventas")
-    df_rec = get_ventas_recientes(engine, limit=10)
+    df_rec = get_recent_sales(engine, limit=10)
     if df_rec.empty:
         st.info("No hay ventas registradas aún.")
     else:
@@ -536,7 +541,7 @@ def page_dashboard(engine):
 # PÁGINA: INVENTARIO Y ALERTAS
 # ---------------------------------------------------------------------------
 
-def page_inventario(engine):
+def page_inventory(engine):
     st.markdown('<div class="section-title">📦 Inventario y Alertas</div>',
                 unsafe_allow_html=True)
 
@@ -548,7 +553,7 @@ def page_inventario(engine):
     with tab_inv:
         search = st.text_input("🔍 Buscar producto (nombre, SKU, marca, categoría)",
                                key="inv_search", placeholder="Ej: creatina, 1013, IMN…")
-        df_inv = get_inventario(engine, search)
+        df_inv = get_inventory(engine, search)
 
         if df_inv.empty:
             st.info("No se encontraron productos.")
@@ -570,7 +575,7 @@ def page_inventario(engine):
     # ── Tab 2: Alertas ──
     with tab_alertas:
         # Sección 1: stock negativo — siempre visible
-        df_negativos = get_alertas_stock(engine, umbral=-1)
+        df_negativos = get_stock_alerts(engine, umbral=-1)
         st.markdown("#### 🔴 Stock negativo (vendidos sin stock)")
         if df_negativos.empty:
             st.success("No hay productos con stock negativo.")
@@ -591,7 +596,7 @@ def page_inventario(engine):
         st.markdown("#### 🟡 Stock bajo")
         umbral = st.slider("Mostrar productos con stock entre 0 y:", 1, 10, 5,
                            key="umbral_alerta")
-        df_bajo = get_alertas_stock(engine, umbral=umbral)
+        df_bajo = get_stock_alerts(engine, umbral=umbral)
         df_bajo = df_bajo[df_bajo["Stock"] >= 0]  # excluir los negativos ya mostrados arriba
 
         if df_bajo.empty:
@@ -609,7 +614,7 @@ def page_inventario(engine):
 
         st.markdown("---")
         st.markdown("#### 📋 Detalle: pedidos sin stock")
-        df_sin = get_pedidos_sin_stock(engine)
+        df_sin = get_orders_without_stock(engine)
         if df_sin.empty:
             st.success("No hay pedidos pendientes por reponer.")
         else:
@@ -623,7 +628,7 @@ def page_inventario(engine):
             "con el stock actual de cada componente. El cuello de botella es el "
             "componente más escaso."
         )
-        df_combos = get_combos_stock_virtual(engine)
+        df_combos = get_combo_virtual_stock(engine)
         if df_combos.empty:
             st.info(
                 "No hay combos registrados aún. "
@@ -643,7 +648,7 @@ def page_inventario(engine):
         st.markdown("---")
         st.markdown("#### ⚠️ Alertas de componentes faltantes en combos")
         mostrar_resueltas = st.checkbox("Incluir alertas ya resueltas", key="chk_resueltas")
-        df_alertas = get_alertas_pedido(engine, solo_pendientes=not mostrar_resueltas)
+        df_alertas = get_order_alerts(engine, solo_pendientes=not mostrar_resueltas)
 
         if df_alertas.empty:
             st.success("No hay alertas de componentes pendientes.")
@@ -667,14 +672,14 @@ def page_inventario(engine):
                 with col_btn:
                     if not resuelta:
                         if st.button("Resolver", key=f"resolve_{row['ID']}"):
-                            marcar_alerta_resuelta(engine, int(row["ID"]))
+                            mark_alert_resolved(engine, int(row["ID"]))
                             get_alertas_pedido.clear()
                             st.rerun()
 
     # ── Tab 4: Hot Products ──
     with tab_hot:
         st.markdown("**Top 5 productos más vendidos (todas las ventas)**")
-        df_hot = get_top_productos(engine, limit=5)
+        df_hot = get_top_products(engine, limit=5)
         if df_hot.empty:
             st.info("No hay datos de ventas aún.")
         else:
@@ -690,7 +695,7 @@ def page_inventario(engine):
 # PÁGINA: COMPRAS E INGRESO DE MERCANCÍA
 # ---------------------------------------------------------------------------
 
-def page_compras(engine):
+def page_purchases(engine):
     st.markdown('<div class="section-title">🛒 Compras e Ingreso de Mercancía</div>',
                 unsafe_allow_html=True)
 
@@ -742,8 +747,8 @@ def page_compras(engine):
                 else:
                     with st.spinner("Procesando con IA..."):
                         try:
-                            from api.purchase_parser import parsear_compra
-                            compra_parsed = parsear_compra(msg)
+                            from api.purchase_parser import parse_purchase
+                            compra_parsed = parse_purchase(msg)
                             st.session_state["parsed_compra"] = compra_parsed
                             st.session_state.pop("compra_guardada", None)
                             st.session_state.pop("last_compra_id", None)
@@ -784,14 +789,14 @@ def page_compras(engine):
                 )
 
                 # Catálogo para sugerir SKUs
-                catalogo = get_catalogo_skus(engine)
+                catalogo = get_sku_catalog(engine)
                 skus_disponibles = [""] + [f"{p['sku']} — {p['nombre']}" for p in catalogo]
                 sku_map = {"": None}
                 for p in catalogo:
                     sku_map[f"{p['sku']} — {p['nombre']}"] = p["sku"]
 
                 # DataFrame inicial con SKU sugerido por F1-score
-                from api.guardar_venta import _buscar_sku
+                from api.guardar_venta import _match_sku as _buscar_sku
                 from sqlalchemy.orm import Session as DBSession
                 from models import Producto as ProdModel
                 from sqlalchemy import select as sql_select
@@ -883,9 +888,9 @@ def page_compras(engine):
                             })[["producto_nombre_raw", "sku", "cantidad", "precio_costo_unitario"]]
 
                             from sqlalchemy.orm import Session as DBSession2
-                            from api.guardar_compra import guardar_compra
+                            from api.guardar_compra import save_purchase
                             with DBSession2(engine) as session:
-                                compra_obj = guardar_compra(
+                                compra_obj = save_purchase(
                                     session, proveedor or None, df_save
                                 )
                                 session.commit()
@@ -909,7 +914,7 @@ def page_compras(engine):
     # ── Tab 2: Historial ── (siempre se renderiza, sin return previo)
     with tab_historial:
         st.markdown("**Últimas 20 compras registradas**")
-        df_hist = get_compras_recientes(engine)
+        df_hist = get_recent_purchases(engine)
         if df_hist.empty:
             st.info("No hay compras registradas aún.")
         else:
@@ -932,13 +937,13 @@ def main():
 
     page = st.session_state.current_page
     if page == "nueva_venta":
-        page_nueva_venta(engine)
+        page_new_sale(engine)
     elif page == "dashboard":
         page_dashboard(engine)
     elif page == "inventario":
-        page_inventario(engine)
+        page_inventory(engine)
     elif page == "compras":
-        page_compras(engine)
+        page_purchases(engine)
 
 
 if __name__ == "__main__":

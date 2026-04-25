@@ -1,8 +1,8 @@
 """
 db_queries.py
 =============
-Todas las consultas a Supabase para la app Streamlit.
-Usa @st.cache_data / @st.cache_resource para minimizar round-trips.
+All Supabase queries for the Streamlit app.
+Uses @st.cache_data / @st.cache_resource to minimize round-trips.
 """
 
 import os
@@ -33,12 +33,12 @@ def get_engine():
         except Exception:
             pass
     if not url:
-        raise ValueError("DATABASE_URL no configurada en .env ni en st.secrets")
+        raise ValueError("DATABASE_URL not configured in .env or st.secrets")
     return create_engine(url, pool_pre_ping=True, pool_recycle=3600)
 
 
 # ---------------------------------------------------------------------------
-# KPIs — TTL corto para que "hoy" siempre esté fresco
+# KPIs — short TTL so "today" is always fresh
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=60)
@@ -51,7 +51,12 @@ def get_kpis(_engine) -> dict:
     with Session(_engine) as s:
         def _agg(q):
             row = s.execute(q).one()
-            return {"count": row[0] or 0, "bruto": int(row[1] or 0), "neto": int(row[2] or 0), "comisiones": int(row[3] or 0)}
+            return {
+                "count": row[0] or 0,
+                "bruto": int(row[1] or 0),
+                "neto": int(row[2] or 0),
+                "comisiones": int(row[3] or 0),
+            }
 
         base = (
             select(
@@ -63,18 +68,18 @@ def get_kpis(_engine) -> dict:
             .where(Venta.estado != EstadoVenta.cancelada)
         )
 
-        hoy = _agg(base.where(Venta.fecha >= today_start).where(Venta.fecha <= today_end))
-        mes = _agg(base.where(Venta.fecha >= month_start))
+        today_kpis = _agg(base.where(Venta.fecha >= today_start).where(Venta.fecha <= today_end))
+        month_kpis = _agg(base.where(Venta.fecha >= month_start))
 
-    return {"hoy": hoy, "mes": mes}
+    return {"hoy": today_kpis, "mes": month_kpis}
 
 
 # ---------------------------------------------------------------------------
-# Dashboard charts
+# Dashboard chart queries
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=300)
-def get_ventas_por_canal(_engine, start: date, end: date) -> pd.DataFrame:
+def get_sales_by_channel(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -93,7 +98,7 @@ def get_ventas_por_canal(_engine, start: date, end: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_tendencia_diaria(_engine, start: date, end: date) -> pd.DataFrame:
+def get_daily_trend(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -111,7 +116,7 @@ def get_tendencia_diaria(_engine, start: date, end: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_top_productos(_engine, limit: int = 10) -> pd.DataFrame:
+def get_top_products(_engine, limit: int = 10) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -132,8 +137,8 @@ def get_top_productos(_engine, limit: int = 10) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_top_facturadores(_engine, limit: int = 10) -> pd.DataFrame:
-    """Canales o métodos de pago que más facturan."""
+def get_top_billers(_engine, limit: int = 10) -> pd.DataFrame:
+    """Payment methods ranked by total revenue."""
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -151,7 +156,7 @@ def get_top_facturadores(_engine, limit: int = 10) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_ventas_recientes(_engine, limit: int = 15) -> pd.DataFrame:
+def get_recent_sales(_engine, limit: int = 15) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -176,11 +181,11 @@ def get_ventas_recientes(_engine, limit: int = 15) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Inventario
+# Inventory queries
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=60)
-def get_inventario(_engine, search: str = "") -> pd.DataFrame:
+def get_inventory(_engine, search: str = "") -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -199,9 +204,9 @@ def get_inventario(_engine, search: str = "") -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_alertas_stock(_engine, umbral: int = 3) -> pd.DataFrame:
+def get_stock_alerts(_engine, umbral: int = 3) -> pd.DataFrame:
     """
-    umbral=-1 → solo stock negativo (< 0)
+    umbral=-1 → only negative stock (< 0)
     umbral>=0 → stock <= umbral
     """
     with Session(_engine) as s:
@@ -215,11 +220,11 @@ def get_alertas_stock(_engine, umbral: int = 3) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_combos_stock_virtual(_engine) -> pd.DataFrame:
+def get_combo_virtual_stock(_engine) -> pd.DataFrame:
     """
-    Calcula el stock virtual de cada combo:
-        stock_virtual = min( floor(componente.stock_actual / cantidad_por_combo) )
-    El componente con menos disponibilidad proporcional es el cuello de botella.
+    Calculates the virtual stock for each combo:
+        virtual_stock = min( floor(component.stock_actual / qty_per_combo) )
+    The component with the lowest proportional availability is the bottleneck.
     """
     with Session(_engine) as s:
         combo_skus = s.execute(
@@ -231,42 +236,42 @@ def get_combos_stock_virtual(_engine) -> pd.DataFrame:
 
         rows = []
         for combo_sku in combo_skus:
-            combo_prod = s.execute(
+            combo_product = s.execute(
                 select(Producto).where(Producto.sku == combo_sku)
             ).scalar_one_or_none()
-            if not combo_prod:
+            if not combo_product:
                 continue
 
-            componentes = s.execute(
+            components = s.execute(
                 select(ComboComponente, Producto)
                 .join(Producto, ComboComponente.componente_sku == Producto.sku)
                 .where(ComboComponente.combo_sku == combo_sku)
             ).all()
 
-            if not componentes:
+            if not components:
                 continue
 
-            stock_virtual = None
-            cuello = None
-            for cc, prod in componentes:
+            virtual_stock = None
+            bottleneck = None
+            for cc, prod in components:
                 sv = prod.stock_actual // cc.cantidad if cc.cantidad > 0 else 0
-                if stock_virtual is None or sv < stock_virtual:
-                    stock_virtual = sv
-                    cuello = f"{prod.nombre} (×{cc.cantidad})"
+                if virtual_stock is None or sv < virtual_stock:
+                    virtual_stock = sv
+                    bottleneck = f"{prod.nombre} (×{cc.cantidad})"
 
             rows.append({
                 "SKU": combo_sku,
-                "Combo": combo_prod.nombre,
-                "Stock Virtual": stock_virtual if stock_virtual is not None else 0,
-                "Cuello de botella": cuello or "—",
+                "Combo": combo_product.nombre,
+                "Stock Virtual": virtual_stock if virtual_stock is not None else 0,
+                "Cuello de botella": bottleneck or "—",
             })
 
     return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=30)
-def get_alertas_pedido(_engine, solo_pendientes: bool = True) -> pd.DataFrame:
-    """Alertas de componentes faltantes generadas al vender combos."""
+def get_order_alerts(_engine, solo_pendientes: bool = True) -> pd.DataFrame:
+    """Missing component alerts generated when selling combos."""
     with Session(_engine) as s:
         q = (
             select(
@@ -293,24 +298,21 @@ def get_alertas_pedido(_engine, solo_pendientes: bool = True) -> pd.DataFrame:
     )
 
 
-def marcar_alerta_resuelta(_engine, alerta_id: int) -> None:
-    """Marca una alerta de pedido como resuelta (sin caché — escritura directa)."""
+def mark_alert_resolved(_engine, alert_id: int) -> None:
+    """Marks a purchase alert as resolved (no cache — direct write)."""
     with Session(_engine) as s:
-        s.execute(
-            select(AlertaPedido).where(AlertaPedido.id == alerta_id)
-        )  # pre-check
         from sqlalchemy import update as sql_update
         s.execute(
             sql_update(AlertaPedido)
-            .where(AlertaPedido.id == alerta_id)
+            .where(AlertaPedido.id == alert_id)
             .values(resuelta=True)
         )
         s.commit()
 
 
 @st.cache_data(ttl=60)
-def get_pedidos_sin_stock(_engine) -> pd.DataFrame:
-    """Productos con stock negativo: vendidos más veces de las que había."""
+def get_orders_without_stock(_engine) -> pd.DataFrame:
+    """Products with negative stock: sold more times than available units."""
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -331,11 +333,11 @@ def get_pedidos_sin_stock(_engine) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Compras
+# Purchase queries
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=60)
-def get_kpis_compras(_engine) -> dict:
+def get_purchase_kpis(_engine) -> dict:
     today = date.today()
     month_start = datetime.combine(today.replace(day=1), datetime.min.time())
     with Session(_engine) as s:
@@ -344,12 +346,12 @@ def get_kpis_compras(_engine) -> dict:
             return {"count": row[0] or 0, "total": int(row[1] or 0)}
 
         base = select(func.count(Compra.id), func.coalesce(func.sum(Compra.monto_total), 0))
-        mes = _agg(base.where(Compra.fecha >= month_start))
-    return {"mes": mes}
+        month_kpis = _agg(base.where(Compra.fecha >= month_start))
+    return {"mes": month_kpis}
 
 
 @st.cache_data(ttl=300)
-def get_tendencia_compras(_engine, start: date, end: date) -> pd.DataFrame:
+def get_purchase_trend(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -366,7 +368,7 @@ def get_tendencia_compras(_engine, start: date, end: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_compras_por_proveedor(_engine, start: date, end: date) -> pd.DataFrame:
+def get_purchases_by_supplier(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -383,10 +385,10 @@ def get_compras_por_proveedor(_engine, start: date, end: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_margen_diario(_engine, start: date, end: date) -> pd.DataFrame:
-    """Une tendencia de ventas y compras por fecha para calcular margen bruto diario."""
+def get_daily_margin(_engine, start: date, end: date) -> pd.DataFrame:
+    """Joins daily sales and purchases to compute gross daily margin."""
     with Session(_engine) as s:
-        v_rows = s.execute(
+        sales_rows = s.execute(
             select(
                 func.date(Venta.fecha).label("Fecha"),
                 func.coalesce(func.sum(Venta.total), 0).label("Ventas_total"),
@@ -397,7 +399,7 @@ def get_margen_diario(_engine, start: date, end: date) -> pd.DataFrame:
             .group_by(func.date(Venta.fecha))
         ).all()
 
-        c_rows = s.execute(
+        purchase_rows = s.execute(
             select(
                 func.date(Compra.fecha).label("Fecha"),
                 func.coalesce(func.sum(Compra.monto_total), 0).label("Compras_total"),
@@ -407,16 +409,15 @@ def get_margen_diario(_engine, start: date, end: date) -> pd.DataFrame:
             .group_by(func.date(Compra.fecha))
         ).all()
 
-    df_v = pd.DataFrame(v_rows, columns=["Fecha", "Ventas_total"])
-    df_c = pd.DataFrame(c_rows, columns=["Fecha", "Compras_total"])
+    df_sales = pd.DataFrame(sales_rows, columns=["Fecha", "Ventas_total"])
+    df_purchases = pd.DataFrame(purchase_rows, columns=["Fecha", "Compras_total"])
 
-    df = pd.merge(df_v, df_c, on="Fecha", how="outer").fillna(0)
-    df = df.sort_values("Fecha").reset_index(drop=True)
-    return df
+    df = pd.merge(df_sales, df_purchases, on="Fecha", how="outer").fillna(0)
+    return df.sort_values("Fecha").reset_index(drop=True)
 
 
 @st.cache_data(ttl=60)
-def get_compras_recientes(_engine, limit: int = 20) -> pd.DataFrame:
+def get_recent_purchases(_engine, limit: int = 20) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
@@ -441,8 +442,8 @@ def get_compras_recientes(_engine, limit: int = 20) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_catalogo_skus(_engine) -> list[dict]:
-    """Retorna lista de {sku, nombre} para poblar el selector de SKU en data_editor."""
+def get_sku_catalog(_engine) -> list[dict]:
+    """Returns list of {sku, nombre} to populate the SKU selector in data_editor."""
     with Session(_engine) as s:
         rows = s.execute(
             select(Producto.sku, Producto.nombre).order_by(Producto.nombre)
@@ -450,36 +451,23 @@ def get_catalogo_skus(_engine) -> list[dict]:
     return [{"sku": r.sku, "nombre": r.nombre} for r in rows]
 
 
-@st.cache_data(ttl=300)
-def get_ventas_hora_canal(_engine, start: date, end: date) -> pd.DataFrame:
-    """Distribución de ventas por hora del día y día de semana (heatmap de actividad)."""
-    with Session(_engine) as s:
-        rows = s.execute(
-            select(
-                func.extract("dow", Venta.fecha).label("DiaSemana"),
-                func.extract("hour", Venta.fecha).label("Hora"),
-                func.count(Venta.id).label("Ventas"),
-            )
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
-            .where(Venta.estado != EstadoVenta.cancelada)
-            .group_by(func.extract("dow", Venta.fecha), func.extract("hour", Venta.fecha))
-            .order_by(func.extract("dow", Venta.fecha), func.extract("hour", Venta.fecha))
-        ).all()
-    return pd.DataFrame(rows, columns=["DiaSemana", "Hora", "Ventas"])
-
-
-@st.cache_data(ttl=300)
-def get_inventario_sunburst(_engine) -> pd.DataFrame:
-    """Distribución de inventario por categoría y producto (sunburst)."""
-    with Session(_engine) as s:
-        rows = s.execute(
-            select(
-                func.coalesce(Producto.categoria, "Sin categoría").label("Categoría"),
-                Producto.nombre,
-                Producto.stock_actual,
-            )
-            .where(Producto.stock_actual > 0)
-            .order_by(Producto.categoria, Producto.nombre)
-        ).all()
-    return pd.DataFrame(rows, columns=["Categoría", "Producto", "Stock"])
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (used by streamlit_app and legacy scripts)
+# ---------------------------------------------------------------------------
+get_ventas_por_canal = get_sales_by_channel
+get_tendencia_diaria = get_daily_trend
+get_top_productos = get_top_products
+get_top_facturadores = get_top_billers
+get_ventas_recientes = get_recent_sales
+get_inventario = get_inventory
+get_alertas_stock = get_stock_alerts
+get_combos_stock_virtual = get_combo_virtual_stock
+get_alertas_pedido = get_order_alerts
+marcar_alerta_resuelta = mark_alert_resolved
+get_pedidos_sin_stock = get_orders_without_stock
+get_kpis_compras = get_purchase_kpis
+get_tendencia_compras = get_purchase_trend
+get_compras_por_proveedor = get_purchases_by_supplier
+get_margen_diario = get_daily_margin
+get_compras_recientes = get_recent_purchases
+get_catalogo_skus = get_sku_catalog

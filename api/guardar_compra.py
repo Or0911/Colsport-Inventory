@@ -1,16 +1,16 @@
 """
 guardar_compra.py
 =================
-Persiste una compra en la base de datos y suma stock a los productos.
+Persists a purchase to the database and adds stock to products.
 
-Flujo:
-    DataFrame editado por el usuario
+Flow:
+    User-edited DataFrame
         │
-        ├─► Insertar fila en 'compras'
-        ├─► Insertar filas en 'detalle_compras'
-        └─► Sumar cantidad a productos.stock_actual
+        ├─► Insert row into 'compras'
+        ├─► Insert rows into 'detalle_compras'
+        └─► Add quantity to productos.stock_actual
 
-Todo ocurre en una sola transacción. Si algo falla, nada se guarda.
+Everything happens in a single transaction. If anything fails, nothing is saved.
 """
 
 import os
@@ -27,37 +27,37 @@ sys.path.insert(0, _root)
 from models import Compra, DetalleCompra, Producto
 
 
-def guardar_compra(
+def save_purchase(
     session: Session,
-    proveedor: Optional[str],
+    supplier: Optional[str],
     df: pd.DataFrame,
 ) -> Compra:
     """
-    Persiste la compra desde el DataFrame editado por el usuario.
+    Persists the purchase from the user-reviewed DataFrame.
 
-    Columnas esperadas en df:
-        - producto_nombre_raw (str)
-        - sku                 (str | None)
-        - cantidad            (int)
-        - precio_costo_unitario (int | None)
+    Expected columns in df:
+        - producto_nombre_raw     (str)
+        - sku                     (str | None)
+        - cantidad                (int)
+        - precio_costo_unitario   (int | None)
 
     Args:
-        session:    Sesión SQLAlchemy activa (sin commit).
-        proveedor:  Nombre del proveedor.
-        df:         DataFrame con los items revisados por el usuario.
+        session:   Active SQLAlchemy session (without commit).
+        supplier:  Supplier name.
+        df:        DataFrame with items reviewed by the user.
 
     Returns:
-        Objeto Compra recién creado.
+        Newly created Compra object.
     """
-    monto_total = int(
+    total_amount = int(
         (df["cantidad"] * df["precio_costo_unitario"].fillna(0)).sum()
     )
 
-    compra = Compra(
-        proveedor=proveedor or None,
-        monto_total=monto_total if monto_total > 0 else None,
+    purchase = Compra(
+        proveedor=supplier or None,
+        monto_total=total_amount if total_amount > 0 else None,
     )
-    session.add(compra)
+    session.add(purchase)
     session.flush()
 
     for _, row in df.iterrows():
@@ -65,28 +65,32 @@ def guardar_compra(
         if isinstance(sku, str) and sku.strip() == "":
             sku = None
 
-        cantidad = int(row["cantidad"])
-        precio = int(row["precio_costo_unitario"]) if pd.notna(row.get("precio_costo_unitario")) else None
+        quantity = int(row["cantidad"])
+        cost = int(row["precio_costo_unitario"]) if pd.notna(row.get("precio_costo_unitario")) else None
 
-        detalle = DetalleCompra(
-            compra_id=compra.id,
+        detail = DetalleCompra(
+            compra_id=purchase.id,
             producto_sku=sku,
             producto_nombre_raw=str(row["producto_nombre_raw"]),
-            cantidad=cantidad,
-            precio_costo_unitario=precio,
+            cantidad=quantity,
+            precio_costo_unitario=cost,
         )
-        session.add(detalle)
+        session.add(detail)
 
-        # Sumar stock solo si el SKU existe en el catálogo
+        # Add stock only if the SKU exists in the catalog
         if sku:
-            existe = session.execute(
+            exists = session.execute(
                 select(Producto.sku).where(Producto.sku == sku)
             ).scalar_one_or_none()
-            if existe:
+            if exists:
                 session.execute(
                     update(Producto)
                     .where(Producto.sku == sku)
-                    .values(stock_actual=Producto.stock_actual + cantidad)
+                    .values(stock_actual=Producto.stock_actual + quantity)
                 )
 
-    return compra
+    return purchase
+
+
+# Backward-compatible alias
+guardar_compra = save_purchase

@@ -1,26 +1,26 @@
 """
 guardar_venta.py
 ================
-Persiste una VentaParseada en la base de datos y descuenta el stock de los productos.
+Persists a ParsedSale to the database and deducts stock from products.
 
-Flujo:
-    VentaParseada
+Flow:
+    ParsedSale
         │
-        ├─► calcular_montos()          → subtotal, comisión, total (Python, no IA)
-        ├─► _obtener_o_crear_canal()   → fila en tabla 'canales'
-        ├─► _obtener_o_crear_cliente() → fila en tabla 'clientes' (si hay datos)
-        ├─► _crear_venta()             → fila en tabla 'ventas'
-        ├─► _crear_items()             → filas en 'venta_items' (catalogo cargado 1 sola vez)
-        ├─► _crear_pago()              → fila en tabla 'pagos'
-        ├─► _crear_envio()             → fila en tabla 'envios' (si aplica)
-        ├─► _crear_rappi_detalle()     → fila en 'rappi_detalles' (si es Rappi)
-        └─► _descontar_stock()         → actualiza productos.stock_actual
+        ├─► calculate_amounts()       → subtotal, commission, total (Python, not AI)
+        ├─► _get_or_create_channel()  → row in 'canales' table
+        ├─► _get_or_create_customer() → row in 'clientes' table (if data exists)
+        ├─► _create_sale()            → row in 'ventas' table
+        ├─► _create_sale_items()      → rows in 'venta_items' (catalog loaded once)
+        ├─► _create_payment()         → row in 'pagos' table
+        ├─► _create_shipping()        → row in 'envios' table (if applicable)
+        ├─► _create_rappi_detail()    → row in 'rappi_detalles' (if Rappi order)
+        └─► _deduct_stock()           → updates productos.stock_actual
 
-Todo ocurre en una sola transacción. Si algo falla, nada se guarda.
+Everything happens in a single transaction. If anything fails, nothing is saved.
 
-Matching de SKU:
-    El catálogo completo se carga UNA sola vez antes de procesar los items.
-    _buscar_sku() trabaja sobre esa lista en memoria: 0 consultas adicionales por item.
+SKU Matching:
+    The full catalog is loaded ONCE before processing items.
+    _match_sku() works on that in-memory list: 0 additional DB queries per item.
 """
 
 import json
@@ -41,305 +41,306 @@ from models import (
     VentaItem, Pago, Envio, RappiDetalle, Producto,
     ComboComponente, AlertaPedido,
 )
-from api.motor_ia import VentaParseada, calcular_montos
+from api.motor_ia import ParsedSale, calculate_amounts
 
 
 # ---------------------------------------------------------------------------
-# Helpers internos
+# Internal helpers
 # ---------------------------------------------------------------------------
 
-def _normalizar(texto: str) -> str:
-    """Convierte a minúsculas y elimina caracteres especiales para comparación."""
-    return re.sub(r"[^a-z0-9 ]", "", texto.lower().strip())
+def _normalize(text: str) -> str:
+    """Lowercases and strips special characters for comparison."""
+    return re.sub(r"[^a-z0-9 ]", "", text.lower().strip())
 
 
-def _tokenizar(texto: str) -> set[str]:
+def _tokenize(text: str) -> set[str]:
     """
-    Normaliza y divide en tokens separando límites número-letra.
-    Aplica stemming básico: quita la "s" final en palabras de más de 3 chars
-    para que singular/plural coincidan (mancuernas → mancuerna).
+    Normalizes and splits into tokens, separating digit-letter boundaries.
+    Applies minimal stemming: removes trailing 's' on words longer than 3 chars
+    so singular/plural match (e.g. 'mancuernas' → 'mancuerna').
     """
-    normalizado = _normalizar(texto)
-    separado = re.sub(r"(\d)([a-z])", r"\1 \2", normalizado)
-    separado = re.sub(r"([a-z])(\d)", r"\1 \2", separado)
-    tokens = separado.split()
-    # Stemming mínimo: plural → singular
+    normalized = _normalize(text)
+    separated = re.sub(r"(\d)([a-z])", r"\1 \2", normalized)
+    separated = re.sub(r"([a-z])(\d)", r"\1 \2", separated)
+    tokens = separated.split()
     tokens = [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in tokens]
     return set(tokens)
 
 
-def _buscar_sku(productos_catalogo: list, nombre_raw: str) -> Optional[str]:
+def _match_sku(catalog: list, raw_name: str) -> Optional[str]:
     """
-    Busca el SKU de un producto en el catálogo ya cargado en memoria.
+    Finds the SKU of a product in the in-memory catalog.
 
-    El catálogo se pasa como lista para evitar una consulta a la BD por cada item.
-    Estrategia: overlap de palabras clave con umbral del 60%.
-    Los tokens se separan en límites número-letra para que "5kg" coincida con "5".
+    The catalog is passed as a list to avoid one DB query per item.
+    Strategy: keyword overlap with a 60% recall threshold.
+    Tokens are split at digit-letter boundaries so '5kg' matches '5'.
 
     Args:
-        productos_catalogo: Lista de objetos Producto ya traídos de la BD.
-        nombre_raw:         Nombre del producto tal como apareció en el mensaje.
+        catalog:  List of Producto objects already fetched from the DB.
+        raw_name: Product name as it appeared in the message.
 
     Returns:
-        SKU del mejor match, o None si no supera el umbral.
+        SKU of the best match, or None if threshold is not met.
     """
-    tokens_raw = _tokenizar(nombre_raw)
-    # Incluir palabras >= 2 chars (ej: "kg", "lb") y dígitos solos (ej: "5", "20")
-    palabras_clave = [
-        p for p in tokens_raw
-        if (len(p) >= 2 or p.isdigit()) and p not in {"und", "unidad", "par", "x2", "x4", "x8"}
+    raw_tokens = _tokenize(raw_name)
+    keywords = [
+        t for t in raw_tokens
+        if (len(t) >= 2 or t.isdigit()) and t not in {"und", "unidad", "par", "x2", "x4", "x8"}
     ]
 
-    if not palabras_clave or not productos_catalogo:
+    if not keywords or not catalog:
         return None
 
-    mejor_match: Optional[str] = None
-    mejor_score = 0.0
+    best_sku: Optional[str] = None
+    best_score = 0.0
 
-    for producto in productos_catalogo:
-        palabras_catalogo = _tokenizar(producto.nombre)
-        coincidencias = sum(1 for p in palabras_clave if p in palabras_catalogo)
-        recall = coincidencias / len(palabras_clave)
+    for product in catalog:
+        catalog_tokens = _tokenize(product.nombre)
+        matches = sum(1 for kw in keywords if kw in catalog_tokens)
+        recall = matches / len(keywords)
 
         if recall < 0.6:
             continue
 
-        # F1 combina recall y precisión: penaliza productos con muchos tokens extra
-        # (evita que un kit que contiene el producto gane sobre el producto individual)
-        precision = coincidencias / len(palabras_catalogo) if palabras_catalogo else 0
+        # F1 balances recall and precision: penalizes products with many extra tokens
+        # (prevents a kit containing the product from outscoring the individual item)
+        precision = matches / len(catalog_tokens) if catalog_tokens else 0
         score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-        if score > mejor_score:
-            mejor_score = score
-            mejor_match = producto.sku
+        if score > best_score:
+            best_score = score
+            best_sku = product.sku
 
-    return mejor_match
+    return best_sku
 
 
-def _obtener_o_crear_canal(session: Session, nombre_canal: str) -> Canal:
-    canal = session.execute(
-        select(Canal).where(Canal.nombre == nombre_canal)
+def _get_or_create_channel(session: Session, channel_name: str) -> Canal:
+    channel = session.execute(
+        select(Canal).where(Canal.nombre == channel_name)
     ).scalar_one_or_none()
 
-    if not canal:
-        canal = Canal(nombre=nombre_canal)
-        session.add(canal)
+    if not channel:
+        channel = Canal(nombre=channel_name)
+        session.add(channel)
         session.flush()
 
-    return canal
+    return channel
 
 
-def _obtener_o_crear_cliente(session: Session, venta_parseada: VentaParseada) -> Optional[Cliente]:
-    datos = venta_parseada.cliente
-    if not datos:
+def _get_or_create_customer(session: Session, parsed_sale: ParsedSale) -> Optional[Cliente]:
+    customer_data = parsed_sale.cliente
+    if not customer_data:
         return None
 
-    if datos.cedula:
-        cliente = session.execute(
-            select(Cliente).where(Cliente.cedula == datos.cedula)
+    if customer_data.cedula:
+        existing = session.execute(
+            select(Cliente).where(Cliente.cedula == customer_data.cedula)
         ).scalar_one_or_none()
 
-        if cliente:
-            if datos.telefono and not cliente.telefono:
-                cliente.telefono = datos.telefono
-            if datos.email and not cliente.email:
-                cliente.email = datos.email
-            return cliente
+        if existing:
+            if customer_data.telefono and not existing.telefono:
+                existing.telefono = customer_data.telefono
+            if customer_data.email and not existing.email:
+                existing.email = customer_data.email
+            return existing
 
-    cliente = Cliente(
-        nombre=datos.nombre,
-        cedula=datos.cedula,
-        telefono=datos.telefono,
-        email=datos.email,
+    customer = Cliente(
+        nombre=customer_data.nombre,
+        cedula=customer_data.cedula,
+        telefono=customer_data.telefono,
+        email=customer_data.email,
     )
-    session.add(cliente)
+    session.add(customer)
     session.flush()
-    return cliente
+    return customer
 
 
-def _crear_items(
+def _create_sale_items(
     session: Session,
-    venta: Venta,
-    venta_parseada: VentaParseada,
-    productos_catalogo: list,
+    sale: Venta,
+    parsed_sale: ParsedSale,
+    catalog: list,
 ) -> list[tuple[str, int]]:
     """
-    Crea los VentaItem usando el catálogo precargado (0 queries extra por item).
+    Creates VentaItem rows using the pre-loaded catalog (0 extra queries per item).
 
     Returns:
-        Lista de (sku, cantidad) para los items con SKU matcheado.
+        List of (sku, quantity) for items where a SKU was matched.
     """
-    items_con_sku: list[tuple[str, int]] = []
+    matched_items: list[tuple[str, int]] = []
 
-    for item_data in venta_parseada.items:
-        sku = _buscar_sku(productos_catalogo, item_data.producto_nombre_raw)
-        subtotal_item = (item_data.precio_unitario or 0) * item_data.cantidad
+    for item_data in parsed_sale.items:
+        sku = _match_sku(catalog, item_data.producto_nombre_raw)
+        item_subtotal = (item_data.precio_unitario or 0) * item_data.cantidad
 
         item = VentaItem(
-            venta_id=venta.id,
+            venta_id=sale.id,
             sku=sku,
             producto_nombre_raw=item_data.producto_nombre_raw,
             cantidad=item_data.cantidad,
             precio_unitario=item_data.precio_unitario or 0,
-            subtotal=subtotal_item,
+            subtotal=item_subtotal,
         )
         session.add(item)
 
         if sku:
-            items_con_sku.append((sku, item_data.cantidad))
+            matched_items.append((sku, item_data.cantidad))
 
-    return items_con_sku
+    return matched_items
 
 
-def _descontar_stock(
+def _deduct_stock(
     session: Session,
-    items_con_sku: list[tuple[str, int]],
-    venta_id: int,
+    matched_items: list[tuple[str, int]],
+    sale_id: int,
 ) -> None:
     """
-    Descuenta el stock de cada producto vendido.
+    Deducts stock for each sold product.
 
-    - Si el SKU es un combo, descuenta los componentes individuales (no el combo).
-    - Si un componente queda con stock negativo tras la venta, registra una
-      fila en alertas_pedido para seguimiento de reposición.
-    - Stock negativo en productos normales es intencional: indica venta sin stock.
+    - If a SKU is a combo, deducts each individual component (not the combo itself).
+    - If a component goes negative after deduction, creates an alertas_pedido row
+      for restocking follow-up.
+    - Negative stock on regular products is intentional: indicates a sale without stock.
     """
-    # Cargar en memoria qué SKUs son combos y sus componentes
+    # Load into memory which SKUs are combos and their components
     combo_map: dict[str, list[tuple[str, int]]] = {}
-    skus_vendidos = [sku for sku, _ in items_con_sku]
-    filas_combo = session.execute(
-        select(ComboComponente).where(ComboComponente.combo_sku.in_(skus_vendidos))
+    sold_skus = [sku for sku, _ in matched_items]
+    combo_rows = session.execute(
+        select(ComboComponente).where(ComboComponente.combo_sku.in_(sold_skus))
     ).scalars().all()
-    for cc in filas_combo:
+    for cc in combo_rows:
         combo_map.setdefault(cc.combo_sku, []).append((cc.componente_sku, cc.cantidad))
 
-    for sku, cantidad in items_con_sku:
+    for sku, quantity in matched_items:
         if sku in combo_map:
-            # Combo: descontar cada componente × cantidad vendida del combo
-            for comp_sku, cant_por_combo in combo_map[sku]:
-                cant_total = cant_por_combo * cantidad
-                prod = session.execute(
+            # Combo: deduct each component × quantity sold of the combo
+            for comp_sku, qty_per_combo in combo_map[sku]:
+                total_qty = qty_per_combo * quantity
+                product = session.execute(
                     select(Producto).where(Producto.sku == comp_sku)
                 ).scalar_one_or_none()
-                if prod is None:
+                if product is None:
                     continue
-                stock_antes = prod.stock_actual
+                stock_before = product.stock_actual
                 session.execute(
                     update(Producto)
                     .where(Producto.sku == comp_sku)
-                    .values(stock_actual=Producto.stock_actual - cant_total)
+                    .values(stock_actual=Producto.stock_actual - total_qty)
                 )
-                stock_despues = stock_antes - cant_total
-                if stock_despues < 0:
+                stock_after = stock_before - total_qty
+                if stock_after < 0:
                     session.add(AlertaPedido(
-                        venta_id=venta_id,
+                        venta_id=sale_id,
                         combo_sku=sku,
                         componente_sku=comp_sku,
-                        componente_nombre=prod.nombre,
-                        cantidad_faltante=abs(stock_despues),
+                        componente_nombre=product.nombre,
+                        cantidad_faltante=abs(stock_after),
                     ))
         else:
-            # Producto individual: descuento directo
+            # Regular product: direct deduction
             session.execute(
                 update(Producto)
                 .where(Producto.sku == sku)
-                .values(stock_actual=Producto.stock_actual - cantidad)
+                .values(stock_actual=Producto.stock_actual - quantity)
             )
 
 
 # ---------------------------------------------------------------------------
-# Función principal
+# Main function
 # ---------------------------------------------------------------------------
 
-def guardar_venta(session: Session, venta_parseada: VentaParseada, texto_original: str) -> Venta:
+def save_sale(session: Session, parsed_sale: ParsedSale, original_text: str) -> Venta:
     """
-    Persiste una VentaParseada completa en la base de datos.
+    Persists a complete ParsedSale to the database.
 
-    - Los montos (subtotal, descuento, total) se calculan en Python, no vienen del LLM.
-    - El catálogo de productos se carga una sola vez para todos los items.
-    - Guarda el JSON estructurado y el texto original para auditoría.
+    - Amounts (subtotal, discount, total) are calculated in Python, not from the LLM.
+    - The product catalog is loaded once for all items.
+    - Saves the structured JSON and original text for auditing.
 
     Args:
-        session:         Sesión SQLAlchemy activa (sin commit).
-        venta_parseada:  Output de motor_ia.parsear_mensaje().
-        texto_original:  Mensaje crudo de WhatsApp (para auditoría).
+        session:       Active SQLAlchemy session (without commit).
+        parsed_sale:   Output of motor_ia.parse_sale_message().
+        original_text: Raw WhatsApp message (for audit trail).
 
     Returns:
-        Objeto Venta recién creado con id asignado.
+        Newly created Venta object with assigned id.
     """
-    # 1. Calcular montos en Python
-    montos = calcular_montos(venta_parseada)
+    amounts = calculate_amounts(parsed_sale)
 
-    # 2. Canal
-    canal = _obtener_o_crear_canal(session, venta_parseada.canal)
+    channel = _get_or_create_channel(session, parsed_sale.canal)
+    customer = _get_or_create_customer(session, parsed_sale)
 
-    # 3. Cliente
-    cliente = _obtener_o_crear_cliente(session, venta_parseada)
-
-    # 4. Venta principal
-    json_extraido = json.dumps(venta_parseada.model_dump(), ensure_ascii=False)
-    venta = Venta(
-        canal_id=canal.id,
-        cliente_id=cliente.id if cliente else None,
+    extracted_json = json.dumps(parsed_sale.model_dump(), ensure_ascii=False)
+    sale = Venta(
+        canal_id=channel.id,
+        cliente_id=customer.id if customer else None,
         cliente_nombre_raw=(
-            venta_parseada.cliente.nombre if venta_parseada.cliente else None
+            parsed_sale.cliente.nombre if parsed_sale.cliente else None
         ),
-        subtotal=montos["subtotal"],
-        costo_envio=montos["costo_envio"],
-        descuento=montos["descuento"],
-        total=montos["total"],
+        subtotal=amounts["subtotal"],
+        costo_envio=amounts["costo_envio"],
+        descuento=amounts["descuento"],
+        total=amounts["total"],
         estado=EstadoVenta.pendiente,
-        fuente_referido=venta_parseada.fuente_referido,
-        notas=venta_parseada.notas,
-        mensaje_original=texto_original,
-        json_extraido=json_extraido,
+        fuente_referido=parsed_sale.fuente_referido,
+        notas=parsed_sale.notas,
+        mensaje_original=original_text,
+        json_extraido=extracted_json,
     )
-    session.add(venta)
+    session.add(sale)
     session.flush()
 
-    # 5. Cargar catálogo UNA sola vez para matching de SKU
-    productos_catalogo = session.execute(select(Producto)).scalars().all()
+    # Load catalog once for all SKU matching
+    catalog = session.execute(select(Producto)).scalars().all()
 
-    # 6. Items + matching SKU
-    items_con_sku = _crear_items(session, venta, venta_parseada, productos_catalogo)
+    matched_items = _create_sale_items(session, sale, parsed_sale, catalog)
 
-    # 7. Pago
-    pago_data = venta_parseada.pago
-    pago = Pago(
-        venta_id=venta.id,
-        metodo=pago_data.metodo,
-        cuenta_destino=pago_data.cuenta_destino,
-        monto=montos["total"],
-        referencia=pago_data.referencia,
+    payment_data = parsed_sale.pago
+    payment = Pago(
+        venta_id=sale.id,
+        metodo=payment_data.metodo,
+        cuenta_destino=payment_data.cuenta_destino,
+        monto=amounts["total"],
+        referencia=payment_data.referencia,
     )
-    session.add(pago)
+    session.add(payment)
 
-    # 8. Envío
-    if venta_parseada.envio:
-        e = venta_parseada.envio
-        envio = Envio(
-            venta_id=venta.id,
+    if parsed_sale.envio:
+        e = parsed_sale.envio
+        shipping = Envio(
+            venta_id=sale.id,
             direccion=e.direccion,
             ciudad=e.ciudad,
             departamento=e.departamento,
             codigo_postal=e.codigo_postal,
         )
-        session.add(envio)
+        session.add(shipping)
 
-    # 9. Detalle Rappi (comision_monto calculado en Python)
-    if venta_parseada.rappi_detalle:
-        r = venta_parseada.rappi_detalle
-        tipo = r.tipo or ("Pro" if "Pro" in venta_parseada.canal else "Regular")
+    if parsed_sale.rappi_detalle:
+        r = parsed_sale.rappi_detalle
+        order_type = r.tipo or ("Pro" if "Pro" in parsed_sale.canal else "Regular")
         rappi = RappiDetalle(
-            venta_id=venta.id,
+            venta_id=sale.id,
             order_id=r.order_id or "sin-id",
-            tipo=tipo,
+            tipo=order_type,
             comision_porcentaje=r.comision_porcentaje,
-            comision_monto=montos["comision_monto"],
+            comision_monto=amounts["comision_monto"],
         )
         session.add(rappi)
 
-    # 10. Descontar stock (con expansión de combos y alertas automáticas)
-    _descontar_stock(session, items_con_sku, venta.id)
+    _deduct_stock(session, matched_items, sale.id)
 
-    return venta
+    return sale
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases
+# ---------------------------------------------------------------------------
+guardar_venta = save_sale
+_normalizar = _normalize
+_tokenizar = _tokenize
+_buscar_sku = _match_sku
+_obtener_o_crear_canal = _get_or_create_channel
+_obtener_o_crear_cliente = _get_or_create_customer
+_crear_items = _create_sale_items
+_descontar_stock = _deduct_stock
