@@ -122,12 +122,10 @@ from app.db_queries import (
     get_combos_stock_virtual, get_alertas_pedido, marcar_alerta_resuelta,
     get_compras_recientes, get_catalogo_skus,
     get_kpis_compras, get_tendencia_compras, get_compras_por_proveedor, get_margen_diario,
-    get_ventas_hora_canal, get_inventario_sunburst,
 )
 from app.charts import (
     chart_ventas_canal, chart_tendencia, chart_top_productos,
     kpi_card,
-    chart_sankey, chart_waterfall, chart_heatmap, chart_sunburst,
 )
 
 
@@ -426,7 +424,6 @@ def page_nueva_venta(engine):
 # ---------------------------------------------------------------------------
 
 def page_dashboard(engine):
-    # ── Dark theme CSS (solo activo cuando esta página renderiza) ──
     st.markdown("""
     <style>
     .main .block-container { background-color: #0d1b2e !important; }
@@ -438,7 +435,6 @@ def page_dashboard(engine):
     </style>
     """, unsafe_allow_html=True)
 
-    # ── Header ──
     st.markdown("""
     <div style="display:flex;align-items:center;gap:18px;margin-bottom:20px;padding-bottom:14px;
                 border-bottom:1px solid #162a47">
@@ -454,43 +450,39 @@ def page_dashboard(engine):
     if "_dash_end" not in st.session_state:
         st.session_state["_dash_end"] = date.today()
 
-    col_d1, col_d2, col_d3 = st.columns([1, 1, 3])
-    with col_d1:
+    pd1, pd2 = st.columns(2)
+    with pd1:
         start_date = st.date_input("Desde", value=st.session_state["_dash_start"])
         st.session_state["_dash_start"] = start_date
-    with col_d2:
+    with pd2:
         end_date = st.date_input("Hasta", value=st.session_state["_dash_end"])
         st.session_state["_dash_end"] = end_date
-    with col_d3:
-        qc = st.columns(4)
-        for i, (lbl, delta) in enumerate([("Hoy", 0), ("7 días", 6), ("30 días", 29), ("90 días", 89)]):
-            if qc[i].button(lbl, key=f"period_{delta}"):
-                st.session_state["_dash_start"] = date.today() - timedelta(days=delta)
-                st.session_state["_dash_end"] = date.today()
-                st.rerun()
 
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    qc = st.columns(4)
+    for i, (lbl, delta) in enumerate([("Hoy", 0), ("7 días", 6), ("30 días", 29), ("90 días", 89)]):
+        if qc[i].button(lbl, key=f"period_{delta}"):
+            st.session_state["_dash_start"] = date.today() - timedelta(days=delta)
+            st.session_state["_dash_end"] = date.today()
+            st.rerun()
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ── Carga de datos ──
-    kpis       = get_kpis(engine)
-    kpis_comp  = get_kpis_compras(engine)
-    df_canal   = get_ventas_por_canal(engine, start_date, end_date)
-    df_tend    = get_tendencia_diaria(engine, start_date, end_date)
-    df_top     = get_top_productos(engine)
-    df_horas   = get_ventas_hora_canal(engine, start_date, end_date)
-    df_sun     = get_inventario_sunburst(engine)
-    df_alertas = get_alertas_stock(engine)
+    kpis      = get_kpis(engine)
+    kpis_comp = get_kpis_compras(engine)
+    df_canal  = get_ventas_por_canal(engine, start_date, end_date)
+    df_tend   = get_tendencia_diaria(engine, start_date, end_date)
+    df_top    = get_top_productos(engine)
+    df_alerr  = get_alertas_stock(engine)
 
-    ventas_neto  = kpis["mes"]["neto"]
-    costo_mes    = kpis_comp["mes"]["total"]
-    comisiones   = kpis["mes"]["comisiones"]
-    margen_mes   = ventas_neto - costo_mes
-    pct_margen   = round(margen_mes / ventas_neto * 100, 1) if ventas_neto > 0 else 0.0
-    n_alertas    = len(df_alertas)
-    alert_color  = "#e74c3c" if n_alertas > 0 else "#607d8b"
+    ventas_neto = kpis["mes"]["neto"]
+    costo_mes   = kpis_comp["mes"]["total"]
+    margen_mes  = ventas_neto - costo_mes
+    pct_margen  = round(margen_mes / ventas_neto * 100, 1) if ventas_neto > 0 else 0.0
+    n_alertas   = len(df_alerr)
 
-    # ── 4 KPI cards ──
-    k1, k2, k3, k4 = st.columns(4)
+    # ── KPIs: 2 × 2 (mejor en móvil que 4 en fila) ──
+    k1, k2 = st.columns(2)
     k1.markdown(kpi_card(
         "Ventas del Mes", fmt_cop(ventas_neto),
         f"{kpis['mes']['count']} órdenes este mes", "#3498db",
@@ -499,13 +491,18 @@ def page_dashboard(engine):
         "Inversión en Compras", fmt_cop(costo_mes),
         f"{kpis_comp['mes']['count']} órdenes de compra", "#607d8b",
     ), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    k3, k4 = st.columns(2)
     k3.markdown(kpi_card(
         "Margen Estimado", f"{pct_margen}%",
         fmt_cop(margen_mes), "#2ecc71" if pct_margen >= 0 else "#e74c3c",
     ), unsafe_allow_html=True)
     k4.markdown(kpi_card(
         "Alertas de Stock", str(n_alertas),
-        "productos por reabastecer", alert_color,
+        "productos por reabastecer",
+        "#e74c3c" if n_alertas > 0 else "#2ecc71",
     ), unsafe_allow_html=True)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
@@ -513,44 +510,20 @@ def page_dashboard(engine):
     def _label(text: str):
         st.markdown(f"<div class='dash-label'>{text}</div>", unsafe_allow_html=True)
 
-    # ── Fila 1: Sankey | Waterfall ──
-    r1a, r1b = st.columns([55, 45], gap="medium")
-    with r1a:
-        _label("Flujo de Capital — Período Seleccionado")
-        st.plotly_chart(
-            chart_sankey(df_canal, ventas_neto, costo_mes, comisiones),
-            use_container_width=True,
-        )
-    with r1b:
-        _label("Cierre del Mes Actual")
-        st.plotly_chart(
-            chart_waterfall(ventas_neto, costo_mes, comisiones),
-            use_container_width=True,
-        )
+    # ── Tendencia diaria — ancho completo ──
+    _label("Tendencia Diaria de Ingresos")
+    st.plotly_chart(chart_tendencia(df_tend), use_container_width=True)
 
-    # ── Fila 2: Heatmap full width ──
-    _label("Actividad de Ventas — Hora y Día de la Semana")
-    st.plotly_chart(chart_heatmap(df_horas), use_container_width=True)
-
-    # ── Fila 3: Canal donut | Top productos ──
-    r3a, r3b = st.columns([2, 3], gap="medium")
-    with r3a:
+    # ── Canal | Top productos ──
+    r2a, r2b = st.columns(2, gap="medium")
+    with r2a:
         _label("Distribución por Canal")
         st.plotly_chart(chart_ventas_canal(df_canal), use_container_width=True)
-    with r3b:
+    with r2b:
         _label("Top 10 Productos Más Vendidos")
         st.plotly_chart(chart_top_productos(df_top), use_container_width=True)
 
-    # ── Fila 4: Sunburst | Tendencia diaria ──
-    r4a, r4b = st.columns([2, 3], gap="medium")
-    with r4a:
-        _label("Distribución de Inventario Activo")
-        st.plotly_chart(chart_sunburst(df_sun), use_container_width=True)
-    with r4b:
-        _label("Tendencia Diaria de Ingresos")
-        st.plotly_chart(chart_tendencia(df_tend), use_container_width=True)
-
-    # ── Ventas recientes ──
+    # ── Últimas ventas ──
     _label("Últimas Ventas")
     df_rec = get_ventas_recientes(engine, limit=10)
     if df_rec.empty:
