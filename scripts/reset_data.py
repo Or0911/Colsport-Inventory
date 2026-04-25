@@ -47,16 +47,24 @@ if confirm != "RESET":
     sys.exit(0)
 
 with engine.begin() as conn:
-    conn.execute(text("DELETE FROM alerta_pedido"))
-    conn.execute(text("DELETE FROM venta_items"))
-    conn.execute(text("DELETE FROM ventas"))
-    conn.execute(text("DELETE FROM detalle_compras"))
-    conn.execute(text("DELETE FROM compras"))
+    # TRUNCATE CASCADE borra las tablas dependientes automáticamente
+    conn.execute(text("""
+        TRUNCATE
+            alertas_pedido,
+            rappi_detalles,
+            envios,
+            pagos,
+            venta_items,
+            ventas,
+            detalle_compras,
+            compras
+        CASCADE
+    """))
     conn.execute(text("UPDATE productos SET stock_actual = 0"))
 
 print()
-print("✓ Tablas de ventas y compras vaciadas.")
-print("✓ Stock de todos los productos puesto en 0.")
+print("OK - Tablas de ventas y compras vaciadas.")
+print("OK - Stock de todos los productos puesto en 0.")
 print()
-print("El catálogo, los combos y los usuarios siguen intactos.")
+print("El catalogo, los combos y los usuarios siguen intactos.")
 print("Ya puedes empezar a ingresar compras para llenar el stock.")
