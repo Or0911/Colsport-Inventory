@@ -23,6 +23,22 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_root, ".env"), override=True)
 
 # ---------------------------------------------------------------------------
+# Theme — one dict per tenant; override via env vars for multi-tenancy.
+# THEME_PRIMARY      → sidebar background, active accents
+# THEME_PRIMARY_DARK → hover/active states on primary surfaces
+# THEME_PRIMARY_TEXT → text color on top of primary background
+# THEME_SECONDARY    → primary action buttons, strong text
+# THEME_CANVAS       → page background
+# ---------------------------------------------------------------------------
+THEME = {
+    "primary":      os.getenv("THEME_PRIMARY",      "#314457"),
+    "primary_dark": os.getenv("THEME_PRIMARY_DARK", "#243344"),
+    "primary_text": os.getenv("THEME_PRIMARY_TEXT", "#ffffff"),
+    "secondary":    os.getenv("THEME_SECONDARY",    "#1a1a1a"),
+    "canvas":       os.getenv("THEME_CANVAS",       "#edeae3"),
+}
+
+# ---------------------------------------------------------------------------
 # Configuración de página — debe ser el primer comando Streamlit
 # ---------------------------------------------------------------------------
 st.set_page_config(
@@ -35,79 +51,202 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 # CSS global
 # ---------------------------------------------------------------------------
+# Inject theme tokens as CSS custom properties so every rule can use var(--cs-*)
+st.markdown(f"""
+<style>
+:root {{
+    --cs-primary:      {THEME["primary"]};
+    --cs-primary-dark: {THEME["primary_dark"]};
+    --cs-primary-text: {THEME["primary_text"]};
+    --cs-secondary:    {THEME["secondary"]};
+    --cs-canvas:       {THEME["canvas"]};
+}}
+</style>
+""", unsafe_allow_html=True)
+
 st.markdown("""
 <style>
-/* Sidebar oscuro */
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"], .stApp {
+    font-family: 'Caveat', cursive !important;
+    background-color: var(--cs-canvas) !important;
+}
+
+/* Sidebar */
 [data-testid="stSidebar"] {
-    background-color: #2c3e50 !important;
+    background-color: var(--cs-primary) !important;
+    border-right: 1px solid var(--cs-primary-dark) !important;
 }
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] span,
 [data-testid="stSidebar"] label,
 [data-testid="stSidebar"] div {
-    color: #ecf0f1 !important;
+    color: var(--cs-primary-text) !important;
+    font-family: 'Caveat', cursive !important;
 }
 [data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.15) !important;
+    border-color: rgba(255,255,255,0.2) !important;
 }
-/* Botones de nav en sidebar */
 [data-testid="stSidebar"] .stButton > button {
     width: 100%;
-    background: rgba(255,255,255,0.06) !important;
-    color: #ecf0f1 !important;
+    background: rgba(255,255,255,0.88) !important;
+    color: var(--cs-primary) !important;
     border: none !important;
-    border-radius: 8px !important;
+    border-radius: 2px !important;
     text-align: left !important;
     padding: 10px 14px !important;
-    font-size: 14px !important;
-    margin-bottom: 4px !important;
-    transition: background 0.15s;
+    font-size: 15px !important;
+    font-family: 'Caveat', cursive !important;
+    margin-bottom: 2px !important;
+    transition: background 0.15s, color 0.15s;
+}
+[data-testid="stSidebar"] .stButton > button p,
+[data-testid="stSidebar"] .stButton > button span,
+[data-testid="stSidebar"] .stButton > button div {
+    color: var(--cs-primary) !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: rgba(52,152,219,0.35) !important;
+    background: var(--cs-primary-dark) !important;
+    color: var(--cs-primary-text) !important;
 }
-/* Botón primario */
-.stButton > button[kind="primary"] {
-    background-color: #3498db !important;
-    color: white !important;
+[data-testid="stSidebar"] .stButton > button:hover p,
+[data-testid="stSidebar"] .stButton > button:hover span,
+[data-testid="stSidebar"] .stButton > button:hover div {
+    color: var(--cs-primary-text) !important;
+}
+
+/* Sidebar collapse/expand button — keep transparent so icon is visible */
+[data-testid="stSidebarCollapseButton"] button {
+    background: transparent !important;
     border: none !important;
-    border-radius: 8px !important;
+    color: var(--cs-primary-text) !important;
 }
-.stButton > button[kind="primary"]:hover {
-    background-color: #2980b9 !important;
+[data-testid="stSidebarCollapseButton"] button:hover {
+    background: var(--cs-primary-dark) !important;
 }
-/* Encabezados de sección */
-.section-title {
+[data-testid="stSidebarCollapseButton"] svg {
+    stroke: var(--cs-primary-text) !important;
+    fill: var(--cs-primary-text) !important;
+}
+
+/* Primary button */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="baseButton-primary"] {
+    background-color: var(--cs-primary) !important;
+    color: var(--cs-primary-text) !important;
+    border: 2px solid var(--cs-primary-dark) !important;
+    border-radius: 2px !important;
+    font-family: 'Caveat', cursive !important;
+    font-size: 16px !important;
+    font-weight: 600 !important;
+}
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="baseButton-primary"]:hover {
+    background-color: var(--cs-primary-dark) !important;
+    color: var(--cs-primary-text) !important;
+}
+
+/* Secondary / default button */
+.stButton > button[kind="secondary"],
+.stButton > button[data-testid="baseButton-secondary"] {
+    background-color: #f0ece4 !important;
+    color: #555 !important;
+    border: 1.5px solid #999 !important;
+    border-radius: 2px !important;
+    font-family: 'Caveat', cursive !important;
+    font-size: 15px !important;
+}
+
+/* Cards */
+.cs-card {
+    background: #fffef9;
+    border: 1.5px solid #d4d0c8;
+    border-radius: 2px;
+    box-shadow: 3px 4px 0 #e8e4dc;
+    padding: 16px 18px;
+    margin-bottom: 12px;
+}
+
+/* Section titles */
+.cs-section-title {
     font-size: 22px;
     font-weight: 700;
-    color: #2c3e50;
+    color: #1a1a1a;
     padding-bottom: 8px;
-    border-bottom: 3px solid #3498db;
+    border-bottom: 2px solid #d4d0c8;
     margin-bottom: 20px;
+    font-family: 'Caveat', cursive;
 }
+
+/* KPI components */
+.cs-kpi-label { font-size: 13px; color: #999; font-family: 'Caveat', cursive; }
+.cs-kpi-value { font-size: 23px; font-weight: 700; color: #1a1a1a; font-family: 'Caveat', cursive; line-height: 1.2; }
+.cs-kpi-sub   { font-size: 13px; color: #aaa; font-family: 'Caveat', cursive; margin-top: 4px; }
+
+/* Status colors */
+.cs-green { color: #5aaa88; }
+.cs-amber { color: #aa8844; }
+.cs-blue  { color: #4488aa; }
+.cs-red   { color: #cc4444; }
+.cs-muted { color: #aaa; }
+
+/* Alert card */
+.cs-alert {
+    background: #fff8f2;
+    border: 1.5px solid #c89070;
+    border-radius: 2px;
+    padding: 8px 14px;
+    margin: 4px 0;
+    font-family: 'Caveat', cursive;
+}
+.cs-alert-amber {
+    background: #fffaf2;
+    border: 1.5px solid #c8a070;
+    border-radius: 2px;
+    padding: 8px 14px;
+    margin: 4px 0;
+    font-family: 'Caveat', cursive;
+}
+
 /* Canal badge */
 .badge {
     display: inline-block;
     padding: 3px 12px;
-    border-radius: 20px;
-    font-size: 12px;
+    border-radius: 2px;
+    border: 1.5px solid currentColor;
+    font-size: 13px;
     font-weight: 600;
-    color: white;
+    font-family: 'Caveat', cursive;
     margin-bottom: 12px;
 }
-/* Alert row */
-.alert-item {
-    background: #fde8e8;
-    border-left: 4px solid #e74c3c;
-    padding: 8px 14px;
-    border-radius: 6px;
-    margin: 5px 0;
-    font-size: 13px;
-    color: #2c3e50;
+
+/* Inputs */
+.stTextInput input, .stTextArea textarea {
+    font-family: 'Caveat', cursive !important;
+    background: #fffef9 !important;
+    border: 1.5px solid #ccc !important;
+    border-radius: 2px !important;
+    color: #333 !important;
 }
-/* Ocultar el hamburger menu y footer de Streamlit */
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
+
+/* Tabs */
+.stTabs [data-baseweb="tab"] {
+    font-family: 'Caveat', cursive !important;
+    font-size: 15px !important;
+    color: #777 !important;
+}
+.stTabs [aria-selected="true"] {
+    color: #1a1a1a !important;
+    border-bottom-color: #1a1a1a !important;
+}
+
+/* Dataframe */
+.stDataFrame { background: #fffef9 !important; }
+
+/* Hide streamlit chrome */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,14 +312,68 @@ CANAL_COLORS = {
 # ---------------------------------------------------------------------------
 
 def page_login():
-    col_c, col_form, col_r = st.columns([1, 1.2, 1])
-    with col_form:
+    st.markdown("""
+    <style>
+    .login-feature { font-size: 17px; color: #666; font-family: 'Caveat', cursive; margin: 6px 0; }
+    .login-card {
+        background: #fffef9;
+        border: 1.5px solid #aaa8a0;
+        border-radius: 2px;
+        box-shadow: 4px 5px 0 #dedad2;
+        padding: 36px 32px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    col_left, col_card, col_right = st.columns([1.1, 1, 0.9])
+
+    with col_left:
+        st.markdown("<br><br><br>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='font-size:46px;font-weight:700;color:#1a1a1a;"
+            "font-family:Caveat,cursive;letter-spacing:-1px'>Colsports</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='font-size:18px;color:#888;font-family:Caveat,cursive;"
+            "margin-top:4px'>Sistema de Ventas & Inventario</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #d4d0c8;margin:16px 0 20px'>",
+            unsafe_allow_html=True,
+        )
+        features = [
+            "✦  Registro de ventas por WhatsApp / Rappi",
+            "✦  Parsing con IA — sin cálculos manuales",
+            "✦  Inventario con deducción automática",
+            "✦  Dashboard de métricas en tiempo real",
+            "✦  Control de combos y stock virtual",
+        ]
+        for f in features:
+            st.markdown(f'<div class="login-feature">{f}</div>', unsafe_allow_html=True)
+
+    with col_card:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.image("https://via.placeholder.com/220x70/2c3e50/ffffff?text=COLSPORTS", width=220)
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("### Acceso al sistema")
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.markdown(
+            "<div style='font-size:28px;font-weight:700;color:#1a1a1a;"
+            "font-family:Caveat,cursive;text-align:center;margin-bottom:4px'>Bienvenido</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='font-size:15px;color:#999;font-family:Caveat,cursive;"
+            "text-align:center;margin-bottom:20px'>Ingresa la contraseña de acceso</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e8e4dc;margin-bottom:20px'>",
+            unsafe_allow_html=True,
+        )
         pwd = st.text_input("Contraseña", type="password", key="login_pwd",
-                            placeholder="Ingresa la contraseña")
+                            placeholder="Contraseña del sistema",
+                            label_visibility="collapsed")
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         if st.button("Ingresar", type="primary", use_container_width=True):
             expected = os.getenv("APP_PASSWORD")
             if not expected:
@@ -192,10 +385,13 @@ def page_login():
             else:
                 st.error("Contraseña incorrecta")
         st.markdown(
-            "<p style='color:#95a5a6;font-size:12px;margin-top:16px'>"
-            "Sistema interno Colsports — acceso restringido</p>",
+            "<div style='text-align:center;margin-top:20px'>"
+            "<hr style='border:none;border-top:1px solid #e8e4dc;margin-bottom:12px'>"
+            "<span style='font-size:12px;color:#bbb;font-family:Caveat,cursive'>"
+            "Sistema interno Colsports · acceso restringido</span></div>",
             unsafe_allow_html=True,
         )
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -203,34 +399,54 @@ def page_login():
 # ---------------------------------------------------------------------------
 
 def render_sidebar():
+    p  = THEME["primary"]
+    pt = THEME["primary_text"]
     with st.sidebar:
         st.markdown(
-            "<div style='text-align:center;padding:16px 0 8px'>"
-            "<span style='font-size:28px'>🏋️</span>"
-            "<div style='font-size:18px;font-weight:700;letter-spacing:1px;margin-top:4px'>COLSPORTS</div>"
-            "<div style='font-size:11px;color:#95a5a6;margin-top:2px'>Sistema de Ventas</div>"
-            "</div>",
+            f"<div style='text-align:center;padding:20px 0 12px'>"
+            f"<div style='display:inline-flex;align-items:center;justify-content:center;"
+            f"width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,0.2);"
+            f"border:1.5px solid rgba(255,255,255,0.5);font-size:16px;font-weight:700;"
+            f"color:{pt};font-family:Caveat,cursive'>CS</div>"
+            f"<div style='font-size:18px;font-weight:700;letter-spacing:0.5px;"
+            f"color:{pt};margin-top:8px;font-family:Caveat,cursive'>COLSPORTS</div>"
+            f"<div style='font-size:12px;color:rgba(255,255,255,0.6);margin-top:2px;"
+            f"font-family:Caveat,cursive'>Sistema de Ventas</div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
-        st.divider()
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:0 0 8px'>",
+            unsafe_allow_html=True,
+        )
 
         icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒"}
-        labels = {"nueva_venta": "Nueva Venta", "dashboard": "Dashboard", "inventario": "Inventario", "compras": "Compras"}
+        labels = {
+            "nueva_venta": "Nueva Venta",
+            "dashboard": "Dashboard",
+            "inventario": "Inventario",
+            "compras": "Compras",
+        }
         for page, label in labels.items():
-            if st.button(f"{icons[page]}  {label}", key=f"nav_{page}"):
+            if st.button(f"{icons[page]}  {label}", key=f"nav_{page}",
+                         use_container_width=True):
                 st.session_state.current_page = page
                 st.rerun()
 
-        st.divider()
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid rgba(255,255,255,0.2);margin:8px 0'>",
+            unsafe_allow_html=True,
+        )
 
-        if st.button("🔒  Cerrar sesión"):
+        if st.button("🔒  Cerrar sesión", use_container_width=True):
             st.session_state.authenticated = False
             st.session_state.current_page = "nueva_venta"
             st.rerun()
 
         st.markdown(
-            "<div style='position:absolute;bottom:20px;width:80%;text-align:center;"
-            "font-size:10px;color:#7f8c8d'>v1.0 · Colsports 2025</div>",
+            "<div style='position:absolute;bottom:16px;left:0;width:100%;text-align:center;"
+            "font-size:11px;color:rgba(255,255,255,0.45);font-family:Caveat,cursive'>"
+            "v1.0 · Colsports 2025</div>",
             unsafe_allow_html=True,
         )
 
@@ -240,18 +456,25 @@ def render_sidebar():
 # ---------------------------------------------------------------------------
 
 def page_new_sale(engine):
-    st.markdown('<div class="section-title">📝 Nueva Venta</div>', unsafe_allow_html=True)
+    st.markdown('<div class="cs-section-title">📝 Nueva Venta</div>', unsafe_allow_html=True)
 
-    # Versión del textarea: incrementar para forzar widget vacío (método garantizado en Streamlit)
     if "sale_msg_v" not in st.session_state:
         st.session_state["sale_msg_v"] = 0
     sale_key = f"sale_msg_{st.session_state['sale_msg_v']}"
 
     col_left, col_right = st.columns([1, 1], gap="large")
 
-    # ── Columna izquierda: formulario ──
+    # ── Left column: form ──
     with col_left:
-        st.markdown("**Pega aquí el mensaje de WhatsApp o Rappi**")
+        st.markdown(
+            '<div class="cs-card">',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='font-size:14px;color:#777;margin-bottom:8px;"
+            "font-family:Caveat,cursive'>Pega aquí el mensaje de WhatsApp, Rappi o Instagram</div>",
+            unsafe_allow_html=True,
+        )
         st.text_area(
             "",
             placeholder=(
@@ -275,6 +498,8 @@ def page_new_sale(engine):
                 st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
                 st.rerun()
 
+        st.markdown('</div>', unsafe_allow_html=True)
+
         if parsear_btn:
             msg = st.session_state.get(sale_key, "").strip()
             if not msg:
@@ -292,10 +517,9 @@ def page_new_sale(engine):
                     except Exception as e:
                         st.error(f"Error al parsear: {e}")
 
-    # ── Columna derecha: vista previa ──
+    # ── Right column: preview ──
     with col_right:
 
-        # Estado: venta ya guardada
         if st.session_state.get("sale_saved") and st.session_state.get("last_venta_id"):
             st.success(f"✅ Venta **#{st.session_state.last_venta_id}** guardada correctamente.")
             if st.button("➕ Registrar otra venta", type="primary", use_container_width=True):
@@ -311,18 +535,23 @@ def page_new_sale(engine):
 
         if venta is None:
             st.markdown(
-                "<div style='background:#f8f9fa;border-radius:10px;padding:40px;text-align:center;color:#95a5a6'>"
+                "<div style='background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;"
+                "padding:40px;text-align:center;color:#aaa;font-family:Caveat,cursive'>"
                 "<div style='font-size:36px'>👈</div>"
-                "<div style='margin-top:8px'>La vista previa aparecerá aquí<br>después de parsear el mensaje</div>"
+                "<div style='margin-top:8px;font-size:15px'>La vista previa aparecerá aquí<br>"
+                "después de procesar el mensaje</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
             return
 
-        # Badge de canal
-        canal_color = CANAL_COLORS.get(venta.canal, "#3498db")
+        st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+
+        # Canal badge
+        canal_color = CANAL_COLORS.get(venta.canal, "#555")
         st.markdown(
-            f'<span class="badge" style="background:{canal_color}">{venta.canal}</span>',
+            f'<span class="badge" style="color:{canal_color};border-color:{canal_color}">'
+            f'{venta.canal}</span>',
             unsafe_allow_html=True,
         )
 
@@ -337,19 +566,26 @@ def page_new_sale(engine):
                 if c.email:    cols[1].markdown(f"**Email:** {c.email}")
 
         # Productos
-        st.markdown("**🛒 Productos**")
+        st.markdown(
+            "<div style='font-size:14px;font-weight:600;color:#555;"
+            "font-family:Caveat,cursive;margin-bottom:6px'>🛒 Productos</div>",
+            unsafe_allow_html=True,
+        )
         for item in venta.items:
             precio = fmt_cop(item.precio_unitario) if item.precio_unitario else "—"
             st.markdown(
-                f"<div style='background:#f0f4f8;border-radius:6px;padding:7px 12px;"
-                f"margin:3px 0;font-size:13px'>"
+                f"<div style='background:#f5f2eb;border:1.5px solid #e0ddd8;border-radius:2px;"
+                f"padding:7px 12px;margin:3px 0;font-size:14px;font-family:Caveat,cursive'>"
                 f"<b>{item.cantidad}×</b> {item.producto_nombre_raw} "
-                f"<span style='float:right;color:#3498db;font-weight:600'>{precio}</span></div>",
+                f"<span style='float:right;color:#1a1a1a;font-weight:700'>{precio}</span></div>",
                 unsafe_allow_html=True,
             )
 
-        # Montos
-        st.divider()
+        # Totals
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:12px 0'>",
+            unsafe_allow_html=True,
+        )
         mc1, mc2, mc3 = st.columns(3)
         mc1.metric("Bruto", fmt_cop(montos["subtotal"]))
         if montos["costo_envio"]:
@@ -360,13 +596,17 @@ def page_new_sale(engine):
                        delta=f"-{pct:.0f}%", delta_color="inverse")
         mc3.metric("**Neto**", fmt_cop(montos["total"]))
 
-        # Pago
+        # Payment
         pago_str = venta.pago.metodo
         if venta.pago.cuenta_destino:
             pago_str += f" › {venta.pago.cuenta_destino}"
-        st.markdown(f"💳 **Pago:** {pago_str}")
+        st.markdown(
+            f"<div style='font-size:14px;color:#555;font-family:Caveat,cursive;margin-top:4px'>"
+            f"💳 <b>Pago:</b> {pago_str}</div>",
+            unsafe_allow_html=True,
+        )
 
-        # Envío / dirección
+        # Shipping
         if venta.envio and (venta.envio.ciudad or venta.envio.direccion):
             with st.expander("📦 Dirección de envío"):
                 e = venta.envio
@@ -374,15 +614,21 @@ def page_new_sale(engine):
                 if e.ciudad:       st.text(f"Ciudad    : {e.ciudad}")
                 if e.departamento: st.text(f"Dpto      : {e.departamento}")
 
-        # Notas
         if venta.notas:
             st.info(f"📝 {venta.notas}")
         if venta.fuente_referido:
-            st.markdown(f"📣 **Referido:** {venta.fuente_referido}")
+            st.markdown(
+                f"<div style='font-size:14px;color:#777;font-family:Caveat,cursive'>"
+                f"📣 <b>Referido:</b> {venta.fuente_referido}</div>",
+                unsafe_allow_html=True,
+            )
 
-        st.divider()
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:12px 0'>",
+            unsafe_allow_html=True,
+        )
 
-        # Botones confirmar / cancelar
+        # Confirm / cancel buttons
         b1, b2 = st.columns([3, 1])
         with b1:
             if st.button("✅ Confirmar y Guardar", type="primary",
@@ -401,7 +647,6 @@ def page_new_sale(engine):
                         st.session_state.last_venta_id = venta_id
                         st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
 
-                        # Invalidar cachés del dashboard
                         get_ventas_por_canal.clear()
                         get_tendencia_diaria.clear()
                         get_top_productos.clear()
@@ -423,33 +668,21 @@ def page_new_sale(engine):
                 st.session_state.sale_montos = None
                 st.rerun()
 
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # PÁGINA: DASHBOARD
 # ---------------------------------------------------------------------------
 
 def page_dashboard(engine):
-    st.markdown("""
-    <style>
-    .main .block-container { background-color: #0d1b2e !important; }
-    .dash-label {
-        font-size: 10px; color: #6b86a8;
-        text-transform: uppercase; letter-spacing: 1.5px;
-        font-weight: 700; margin-bottom: 6px; margin-top: 2px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="cs-section-title">📊 Dashboard</div>',
+        unsafe_allow_html=True,
+    )
 
-    st.markdown("""
-    <div style="display:flex;align-items:center;gap:18px;margin-bottom:20px;padding-bottom:14px;
-                border-bottom:1px solid #162a47">
-        <div style="font-size:28px;font-weight:900;color:#3498db;letter-spacing:-1px">COL SPORTS</div>
-        <div style="font-size:10px;color:#6b86a8;text-transform:uppercase;letter-spacing:2.5px;
-                    border-left:2px solid #162a47;padding-left:16px">ANALYTICS DASHBOARD</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Selector de período ──
+    # ── Period selector ──
+    st.markdown('<div class="cs-card">', unsafe_allow_html=True)
     if "_dash_start" not in st.session_state:
         st.session_state["_dash_start"] = date.today() - timedelta(days=29)
     if "_dash_end" not in st.session_state:
@@ -469,6 +702,7 @@ def page_dashboard(engine):
             st.session_state["_dash_start"] = date.today() - timedelta(days=delta)
             st.session_state["_dash_end"] = date.today()
             st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -486,53 +720,68 @@ def page_dashboard(engine):
     pct_margen  = round(margen_mes / ventas_neto * 100, 1) if ventas_neto > 0 else 0.0
     n_alertas   = len(df_alerr)
 
-    # ── KPIs: 2 × 2 (mejor en móvil que 4 en fila) ──
-    k1, k2 = st.columns(2)
+    # ── KPI row — 4 columns ──
+    k1, k2, k3, k4 = st.columns(4)
     k1.markdown(kpi_card(
         "Ventas del Mes", fmt_cop(ventas_neto),
-        f"{kpis['mes']['count']} órdenes este mes", "#3498db",
+        f"{kpis['mes']['count']} órdenes este mes", "#555",
     ), unsafe_allow_html=True)
     k2.markdown(kpi_card(
         "Inversión en Compras", fmt_cop(costo_mes),
-        f"{kpis_comp['mes']['count']} órdenes de compra", "#607d8b",
+        f"{kpis_comp['mes']['count']} órdenes de compra", "#aaa",
     ), unsafe_allow_html=True)
-
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
-    k3, k4 = st.columns(2)
     k3.markdown(kpi_card(
         "Margen Estimado", f"{pct_margen}%",
-        fmt_cop(margen_mes), "#2ecc71" if pct_margen >= 0 else "#e74c3c",
+        fmt_cop(margen_mes),
+        "#5aaa88" if pct_margen >= 0 else "#cc4444",
     ), unsafe_allow_html=True)
     k4.markdown(kpi_card(
         "Alertas de Stock", str(n_alertas),
         "productos por reabastecer",
-        "#e74c3c" if n_alertas > 0 else "#2ecc71",
+        "#cc4444" if n_alertas > 0 else "#5aaa88",
     ), unsafe_allow_html=True)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    def _label(text: str):
-        st.markdown(f"<div class='dash-label'>{text}</div>", unsafe_allow_html=True)
-
-    # ── Daily trend — full width ──
-    _label("Tendencia Diaria de Ingresos")
+    # ── Daily trend ──
+    st.markdown(
+        '<div class="cs-section-title" style="font-size:15px;border-bottom:1px solid #e0ddd8;'
+        'margin-bottom:8px">Tendencia Diaria de Ingresos</div>',
+        unsafe_allow_html=True,
+    )
     st.plotly_chart(chart_tendencia(df_tend), use_container_width=True)
 
-    # ── Channel donut | Top products ──
+    # ── Channel + Top products ──
     r2a, r2b = st.columns(2, gap="medium")
     with r2a:
-        _label("Distribución por Canal")
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:15px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:8px">Distribución por Canal</div>',
+            unsafe_allow_html=True,
+        )
         st.plotly_chart(chart_ventas_canal(df_canal), use_container_width=True)
     with r2b:
-        _label("Top 10 Productos Más Vendidos")
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:15px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:8px">Top 10 Productos Más Vendidos</div>',
+            unsafe_allow_html=True,
+        )
         st.plotly_chart(chart_top_productos(df_top), use_container_width=True)
 
-    # ── Recent sales table ──
-    _label("Últimas Ventas")
+    # ── Recent sales ──
+    st.markdown(
+        '<div class="cs-section-title" style="font-size:15px;border-bottom:1px solid #e0ddd8;'
+        'margin-bottom:8px">Últimas Ventas</div>',
+        unsafe_allow_html=True,
+    )
     df_rec = get_recent_sales(engine, limit=10)
     if df_rec.empty:
-        st.info("No hay ventas registradas aún.")
+        st.markdown(
+            '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+            'padding:20px;text-align:center;color:#aaa;font-family:Caveat,cursive">'
+            'No hay ventas registradas aún.</div>',
+            unsafe_allow_html=True,
+        )
     else:
         st.dataframe(df_rec, use_container_width=True, hide_index=True)
 
@@ -542,31 +791,39 @@ def page_dashboard(engine):
 # ---------------------------------------------------------------------------
 
 def page_inventory(engine):
-    st.markdown('<div class="section-title">📦 Inventario y Alertas</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="cs-section-title">📦 Inventario y Alertas</div>', unsafe_allow_html=True)
 
     tab_inv, tab_alertas, tab_combos, tab_hot = st.tabs(
         ["📋 Catálogo", "🚨 Alertas de stock", "🧩 Combos", "🔥 Hot Products"]
     )
 
-    # ── Tab 1: Catálogo completo ──
+    # ── Tab 1: Catálogo ──
     with tab_inv:
         search = st.text_input("🔍 Buscar producto (nombre, SKU, marca, categoría)",
                                key="inv_search", placeholder="Ej: creatina, 1013, IMN…")
         df_inv = get_inventory(engine, search)
 
         if df_inv.empty:
-            st.info("No se encontraron productos.")
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Caveat,cursive">'
+                'No se encontraron productos.</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.caption(f"{len(df_inv)} productos encontrados")
+            st.markdown(
+                f'<div style="font-size:13px;color:#aaa;font-family:Caveat,cursive;'
+                f'margin-bottom:8px">{len(df_inv)} productos encontrados</div>',
+                unsafe_allow_html=True,
+            )
 
             def _style_stock(val):
                 if val < 0:
-                    return "background-color:#fde8e8;color:#c0392b;font-weight:700"
+                    return "background-color:#fff0ee;color:#cc4444;font-weight:700"
                 if val <= 3:
-                    return "background-color:#fef9e7;color:#d35400;font-weight:600"
+                    return "background-color:#fff8f2;color:#aa8844;font-weight:600"
                 if val > 10:
-                    return "background-color:#eafaf1;color:#1e8449"
+                    return "background-color:#f0f9f4;color:#5aaa88"
                 return ""
 
             styled = df_inv.style.applymap(_style_stock, subset=["Stock"])
@@ -574,94 +831,162 @@ def page_inventory(engine):
 
     # ── Tab 2: Alertas ──
     with tab_alertas:
-        # Sección 1: stock negativo — siempre visible
         df_negativos = get_stock_alerts(engine, umbral=-1)
-        st.markdown("#### 🔴 Stock negativo (vendidos sin stock)")
+
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">🔴 Stock negativo</div>',
+            unsafe_allow_html=True,
+        )
         if df_negativos.empty:
-            st.success("No hay productos con stock negativo.")
+            st.markdown(
+                '<div style="background:#f0f9f4;border:1.5px solid #5aaa88;border-radius:2px;'
+                'padding:10px 16px;font-family:Caveat,cursive;color:#3a7a58">'
+                '✓ No hay productos con stock negativo.</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.error(f"❗ {len(df_negativos)} productos con stock negativo — requieren reposición urgente")
+            st.markdown(
+                f'<div style="background:#fff0ee;border:1.5px solid #cc4444;border-radius:2px;'
+                f'padding:10px 16px;font-family:Caveat,cursive;color:#cc4444;margin-bottom:8px">'
+                f'❗ {len(df_negativos)} productos con stock negativo — reposición urgente</div>',
+                unsafe_allow_html=True,
+            )
             for _, row in df_negativos.iterrows():
                 st.markdown(
-                    f'<div class="alert-item">'
+                    f'<div class="cs-alert">'
                     f'🔴 <b>[{row["SKU"]}]</b> {row["Nombre"]} '
-                    f'— <span style="color:#e74c3c;font-weight:700">Stock: {row["Stock"]}</span>'
+                    f'— <span style="color:#cc4444;font-weight:700">Stock: {row["Stock"]}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-        st.markdown("---")
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:16px 0'>",
+            unsafe_allow_html=True,
+        )
 
-        # Sección 2: stock bajo — controlado por slider
-        st.markdown("#### 🟡 Stock bajo")
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">🟡 Stock bajo</div>',
+            unsafe_allow_html=True,
+        )
         umbral = st.slider("Mostrar productos con stock entre 0 y:", 1, 10, 5,
                            key="umbral_alerta")
         df_bajo = get_stock_alerts(engine, umbral=umbral)
-        df_bajo = df_bajo[df_bajo["Stock"] >= 0]  # excluir los negativos ya mostrados arriba
+        df_bajo = df_bajo[df_bajo["Stock"] >= 0]
 
         if df_bajo.empty:
-            st.success(f"✅ No hay productos con stock entre 0 y {umbral}.")
+            st.markdown(
+                f'<div style="background:#f0f9f4;border:1.5px solid #5aaa88;border-radius:2px;'
+                f'padding:10px 16px;font-family:Caveat,cursive;color:#3a7a58">'
+                f'✓ No hay productos con stock entre 0 y {umbral}.</div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.warning(f"⚠️ {len(df_bajo)} productos con stock entre 0 y {umbral}")
+            st.markdown(
+                f'<div style="background:#fffaf2;border:1.5px solid #c8a070;border-radius:2px;'
+                f'padding:10px 16px;font-family:Caveat,cursive;color:#aa8844;margin-bottom:8px">'
+                f'⚠️ {len(df_bajo)} productos con stock entre 0 y {umbral}</div>',
+                unsafe_allow_html=True,
+            )
             for _, row in df_bajo.iterrows():
                 st.markdown(
-                    f'<div class="alert-item" style="background:#fef9e7;border-color:#e67e22">'
+                    f'<div class="cs-alert-amber">'
                     f'🟡 <b>[{row["SKU"]}]</b> {row["Nombre"]} '
-                    f'— <span style="color:#d35400;font-weight:700">Stock: {row["Stock"]}</span>'
+                    f'— <span style="color:#aa8844;font-weight:700">Stock: {row["Stock"]}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
 
-        st.markdown("---")
-        st.markdown("#### 📋 Detalle: pedidos sin stock")
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:16px 0'>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">📋 Pedidos sin stock</div>',
+            unsafe_allow_html=True,
+        )
         df_sin = get_orders_without_stock(engine)
         if df_sin.empty:
-            st.success("No hay pedidos pendientes por reponer.")
+            st.markdown(
+                '<div style="background:#f0f9f4;border:1.5px solid #5aaa88;border-radius:2px;'
+                'padding:10px 16px;font-family:Caveat,cursive;color:#3a7a58">'
+                '✓ No hay pedidos pendientes por reponer.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.dataframe(df_sin, use_container_width=True, hide_index=True)
 
     # ── Tab 3: Combos ──
     with tab_combos:
-        st.markdown("#### 🧩 Stock Virtual de Combos")
-        st.caption(
-            "El stock virtual es cuántas unidades del combo se podrían armar "
-            "con el stock actual de cada componente. El cuello de botella es el "
-            "componente más escaso."
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:8px">🧩 Stock Virtual de Combos</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div style="font-size:13px;color:#aaa;font-family:Caveat,cursive;margin-bottom:12px">'
+            'Stock virtual = cuántas unidades del combo se pueden armar con el stock actual '
+            'de cada componente. El cuello de botella es el componente más escaso.</div>',
+            unsafe_allow_html=True,
         )
         df_combos = get_combo_virtual_stock(engine)
         if df_combos.empty:
-            st.info(
-                "No hay combos registrados aún. "
-                "Agrega filas en la tabla **combo_componentes** para que aparezcan aquí."
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Caveat,cursive">'
+                'No hay combos registrados aún. Agrega filas en combo_componentes para que '
+                'aparezcan aquí.</div>',
+                unsafe_allow_html=True,
             )
         else:
             def _style_combo_stock(val):
                 if val <= 0:
-                    return "background-color:#fde8e8;color:#c0392b;font-weight:700"
+                    return "background-color:#fff0ee;color:#cc4444;font-weight:700"
                 if val <= 3:
-                    return "background-color:#fef9e7;color:#d35400;font-weight:600"
-                return "background-color:#eafaf1;color:#1e8449"
+                    return "background-color:#fff8f2;color:#aa8844;font-weight:600"
+                return "background-color:#f0f9f4;color:#5aaa88"
 
             styled_combos = df_combos.style.applymap(_style_combo_stock, subset=["Stock Virtual"])
             st.dataframe(styled_combos, use_container_width=True, hide_index=True)
 
-        st.markdown("---")
-        st.markdown("#### ⚠️ Alertas de componentes faltantes en combos")
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:16px 0'>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">⚠️ Alertas de componentes faltantes</div>',
+            unsafe_allow_html=True,
+        )
         mostrar_resueltas = st.checkbox("Incluir alertas ya resueltas", key="chk_resueltas")
         df_alertas = get_order_alerts(engine, solo_pendientes=not mostrar_resueltas)
 
         if df_alertas.empty:
-            st.success("No hay alertas de componentes pendientes.")
+            st.markdown(
+                '<div style="background:#f0f9f4;border:1.5px solid #5aaa88;border-radius:2px;'
+                'padding:10px 16px;font-family:Caveat,cursive;color:#3a7a58">'
+                '✓ No hay alertas de componentes pendientes.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             for _, row in df_alertas.iterrows():
                 resuelta = bool(row["Resuelta"])
-                color = "#eafaf1" if resuelta else "#fde8e8"
-                borde = "#27ae60" if resuelta else "#e74c3c"
+                if resuelta:
+                    card_style = ('background:#f0f9f4;border:1.5px solid #5aaa88;'
+                                  'border-radius:2px;padding:8px 14px;margin:4px 0;'
+                                  'font-family:Caveat,cursive')
+                else:
+                    card_style = ('background:#fff8f2;border:1.5px solid #c89070;'
+                                  'border-radius:2px;padding:8px 14px;margin:4px 0;'
+                                  'font-family:Caveat,cursive')
                 estado_txt = "✅ Resuelta" if resuelta else "🔴 Pendiente"
                 col_info, col_btn = st.columns([5, 1])
                 with col_info:
                     st.markdown(
-                        f'<div class="alert-item" style="background:{color};border-color:{borde}">'
+                        f'<div style="{card_style}">'
                         f'<b>Combo:</b> {row["Combo SKU"]} &nbsp;|&nbsp; '
                         f'<b>Faltante:</b> {row["Componente"]} × {row["Faltante"]} und '
                         f'&nbsp;|&nbsp; <b>Venta:</b> #{row["Venta ID"]} '
@@ -678,17 +1003,35 @@ def page_inventory(engine):
 
     # ── Tab 4: Hot Products ──
     with tab_hot:
-        st.markdown("**Top 5 productos más vendidos (todas las ventas)**")
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">🔥 Top 5 productos más vendidos</div>',
+            unsafe_allow_html=True,
+        )
         df_hot = get_top_products(engine, limit=5)
         if df_hot.empty:
-            st.info("No hay datos de ventas aún.")
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Caveat,cursive">'
+                'No hay datos de ventas aún.</div>',
+                unsafe_allow_html=True,
+            )
         else:
+            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
             for i, (_, row) in enumerate(df_hot.iterrows(), 1):
-                medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i - 1]
-                c1, c2, c3 = st.columns([3, 1, 1])
-                c1.markdown(f"{medal} **{row['Producto'][:50]}**")
-                c2.metric("Unidades", int(row["Unidades"]))
-                c3.metric("Ingresos", fmt_cop(row["Ingresos"]))
+                medal = medals[i - 1]
+                st.markdown(
+                    f'<div style="background:#fffef9;border:1.5px solid #d4d0c8;border-radius:2px;'
+                    f'box-shadow:2px 3px 0 #e8e4dc;padding:10px 16px;margin:6px 0;'
+                    f'display:flex;align-items:center;justify-content:space-between;'
+                    f'font-family:Caveat,cursive">'
+                    f'<span style="font-size:16px">{medal} <b>{row["Producto"][:50]}</b></span>'
+                    f'<span style="color:#aaa;font-size:13px">{int(row["Unidades"])} uds</span>'
+                    f'<span style="color:#5aaa88;font-weight:700;font-size:15px">'
+                    f'{fmt_cop(row["Ingresos"])}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -696,10 +1039,9 @@ def page_inventory(engine):
 # ---------------------------------------------------------------------------
 
 def page_purchases(engine):
-    st.markdown('<div class="section-title">🛒 Compras e Ingreso de Mercancía</div>',
+    st.markdown('<div class="cs-section-title">🛒 Compras e Ingreso de Mercancía</div>',
                 unsafe_allow_html=True)
 
-    # Versión del textarea: incrementar limpia el campo de forma garantizada
     if "purchase_msg_v" not in st.session_state:
         st.session_state["purchase_msg_v"] = 0
     purchase_key = f"purchase_msg_{st.session_state['purchase_msg_v']}"
@@ -711,7 +1053,12 @@ def page_purchases(engine):
         col_left, col_right = st.columns([1, 1.3], gap="large")
 
         with col_left:
-            st.markdown("**Pega aquí el mensaje del proveedor o lista de productos**")
+            st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+            st.markdown(
+                "<div style='font-size:14px;color:#777;margin-bottom:8px;"
+                "font-family:Caveat,cursive'>Pega aquí el mensaje del proveedor o lista de productos</div>",
+                unsafe_allow_html=True,
+            )
             st.text_area(
                 "",
                 placeholder=(
@@ -740,6 +1087,8 @@ def page_purchases(engine):
                     st.session_state["purchase_msg_v"] += 1
                     st.rerun()
 
+            st.markdown('</div>', unsafe_allow_html=True)
+
             if analizar_btn:
                 msg = st.session_state.get(purchase_key, "").strip()
                 if not msg:
@@ -756,7 +1105,6 @@ def page_purchases(engine):
                             st.error(f"Error al analizar: {e}")
 
         with col_right:
-            # Estado: compra ya guardada — sin return, usando if/elif/else
             if st.session_state.get("compra_guardada") and st.session_state.get("last_compra_id"):
                 st.success(
                     f"✅ Compra **#{st.session_state['last_compra_id']}** "
@@ -771,10 +1119,10 @@ def page_purchases(engine):
 
             elif st.session_state.get("parsed_compra") is None:
                 st.markdown(
-                    "<div style='background:#f8f9fa;border-radius:10px;padding:40px;"
-                    "text-align:center;color:#95a5a6'>"
+                    "<div style='background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;"
+                    "padding:40px;text-align:center;color:#aaa;font-family:Caveat,cursive'>"
                     "<div style='font-size:36px'>👈</div>"
-                    "<div style='margin-top:8px'>La tabla de revisión aparecerá aquí<br>"
+                    "<div style='margin-top:8px;font-size:15px'>La tabla de revisión aparecerá aquí<br>"
                     "después de analizar el mensaje</div></div>",
                     unsafe_allow_html=True,
                 )
@@ -782,20 +1130,17 @@ def page_purchases(engine):
             else:
                 compra_parsed = st.session_state["parsed_compra"]
 
-                # Proveedor editable
                 proveedor = st.text_input(
                     "Proveedor", value=compra_parsed.proveedor or "",
                     key="compra_proveedor", placeholder="Nombre del proveedor"
                 )
 
-                # Catálogo para sugerir SKUs
                 catalogo = get_sku_catalog(engine)
                 skus_disponibles = [""] + [f"{p['sku']} — {p['nombre']}" for p in catalogo]
                 sku_map = {"": None}
                 for p in catalogo:
                     sku_map[f"{p['sku']} — {p['nombre']}"] = p["sku"]
 
-                # DataFrame inicial con SKU sugerido por F1-score
                 from api.guardar_venta import _match_sku as _buscar_sku
                 from sqlalchemy.orm import Session as DBSession
                 from models import Producto as ProdModel
@@ -822,9 +1167,18 @@ def page_purchases(engine):
                 import pandas as pd
                 df_edit = pd.DataFrame(rows_editor)
 
-                st.markdown("**Revisar y ajustar productos detectados**")
-                st.caption("Edita el SKU, cantidad o costo antes de confirmar. "
-                           "Solo se suma stock a los productos con SKU asignado.")
+                st.markdown(
+                    '<div class="cs-section-title" style="font-size:16px;'
+                    'border-bottom:1px solid #e0ddd8;margin-bottom:6px">'
+                    'Revisar y ajustar productos detectados</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    '<div style="font-size:13px;color:#aaa;font-family:Caveat,cursive;'
+                    'margin-bottom:8px">Edita el SKU, cantidad o costo antes de confirmar. '
+                    'Solo se suma stock a los productos con SKU asignado.</div>',
+                    unsafe_allow_html=True,
+                )
 
                 df_resultado = st.data_editor(
                     df_edit,
@@ -851,23 +1205,26 @@ def page_purchases(engine):
                     },
                 )
 
-                # Total estimado
                 try:
                     total_est = int(
                         (df_resultado["Cantidad"] * df_resultado["Costo unitario (COP)"].fillna(0)).sum()
                     )
                     total_fmt = f"${total_est:,}".replace(",", ".")
                     st.markdown(
-                        f"<div style='text-align:right;font-size:15px;color:#2c3e50'>"
+                        f"<div style='text-align:right;font-size:16px;color:#555;"
+                        f"font-family:Caveat,cursive;margin-top:8px'>"
                         f"<b>Total estimado:</b> "
-                        f"<span style='color:#3498db;font-weight:700'>{total_fmt}</span>"
+                        f"<span style='color:#1a1a1a;font-weight:700'>{total_fmt}</span>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
                 except Exception:
                     pass
 
-                st.divider()
+                st.markdown(
+                    "<hr style='border:none;border-top:1px solid #e0ddd8;margin:12px 0'>",
+                    unsafe_allow_html=True,
+                )
 
                 if st.button(
                     "✅ Confirmar e Ingresar a Inventario",
@@ -911,12 +1268,21 @@ def page_purchases(engine):
                         except Exception as e:
                             st.error(f"Error al guardar: {e}")
 
-    # ── Tab 2: Historial ── (siempre se renderiza, sin return previo)
+    # ── Tab 2: Historial ──
     with tab_historial:
-        st.markdown("**Últimas 20 compras registradas**")
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">Últimas 20 compras registradas</div>',
+            unsafe_allow_html=True,
+        )
         df_hist = get_recent_purchases(engine)
         if df_hist.empty:
-            st.info("No hay compras registradas aún.")
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Caveat,cursive">'
+                'No hay compras registradas aún.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
