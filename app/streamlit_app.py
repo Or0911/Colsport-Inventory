@@ -263,6 +263,7 @@ from app.db_queries import (
     get_recent_purchases, get_sku_catalog,
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
     # legacy aliases kept for cache-clear calls
+    get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
     get_pedidos_sin_stock, get_combos_stock_virtual, get_alertas_pedido,
     get_inventario, get_compras_recientes,
