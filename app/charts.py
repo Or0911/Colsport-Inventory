@@ -86,23 +86,26 @@ def _hex_to_rgb(hex_color: str) -> str:
 # KPI card — dark premium style
 # ---------------------------------------------------------------------------
 
-def kpi_card(label: str, value: str, sub: str = "", color: str = D_BLUE) -> str:
+def kpi_card(label: str, value: str, sub: str = "", color: str = "#555") -> str:
     sub_html = (
-        f"<div style='font-size:11px;color:{D_MUTED};margin-top:6px'>{sub}</div>"
+        f"<div style='font-size:13px;color:{color};margin-top:4px;"
+        f"font-family:Caveat,cursive'>{sub}</div>"
         if sub else ""
     )
     return f"""
     <div style="
-        background:linear-gradient(145deg,{D_SURFACE} 0%,{D_SURFACE2} 100%);
-        border-radius:16px; padding:20px 18px;
-        border-left:4px solid {color};
-        box-shadow:0 4px 24px rgba(0,0,0,0.45);
-        height:100%; box-sizing:border-box;
+        background: #fffef9;
+        border: 1.5px solid #d4d0c8;
+        border-radius: 2px;
+        box-shadow: 3px 4px 0 #e8e4dc;
+        border-left: 4px solid {color};
+        padding: 16px 18px;
+        height: 100%;
+        box-sizing: border-box;
+        font-family: 'Caveat', cursive;
     ">
-        <div style="font-size:10px;color:{D_MUTED};text-transform:uppercase;
-                    letter-spacing:1.2px;margin-bottom:8px;font-weight:600">{label}</div>
-        <div style="font-size:26px;font-weight:800;color:{color};
-                    line-height:1.1;letter-spacing:-0.5px">{value}</div>
+        <div style="font-size:13px;color:#999;margin-bottom:6px">{label}</div>
+        <div style="font-size:23px;font-weight:700;color:#1a1a1a;line-height:1.2">{value}</div>
         {sub_html}
     </div>"""
 
