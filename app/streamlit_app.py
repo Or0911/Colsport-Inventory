@@ -262,7 +262,7 @@ from app.db_queries import (
     get_combo_virtual_stock, get_order_alerts, mark_alert_resolved,
     get_recent_purchases, get_sku_catalog,
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
-    get_sale_detail, get_money_by_account, get_all_sales, update_sale,
+    get_sale_detail, get_money_by_account, get_all_sales, update_sale, update_sale_items,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
@@ -1536,11 +1536,11 @@ def page_sales(engine):
     with tab_editor:
         st.markdown(
             '<div style="font-size:14px;color:#777;font-family:Caveat,cursive;margin-bottom:12px">'
-            'Busca una venta por ID para corregir su estado o agregar/editar notas.</div>',
+            'Busca una venta por ID para corregir productos, valores, estado o notas.</div>',
             unsafe_allow_html=True,
         )
 
-        ec1, ec2 = st.columns([1, 2])
+        ec1, _ = st.columns([1, 2])
         with ec1:
             edit_id = st.number_input("ID de la venta a editar", min_value=1, step=1,
                                       key="sv_edit_id", label_visibility="visible")
@@ -1555,40 +1555,172 @@ def page_sales(engine):
             st.warning(f"No existe venta #{int(edit_id)}")
         elif detalle_edit:
             st.markdown('<div class="cs-card">', unsafe_allow_html=True)
-            _render_sale_detail(detalle_edit)
-            st.markdown("<hr style='border:none;border-top:1px solid #e0ddd8;margin:14px 0'>", unsafe_allow_html=True)
+
+            # ── Venta actual (lectura) ──
+            with st.expander("📄 Venta actual (referencia)", expanded=False):
+                _render_sale_detail(detalle_edit)
 
             st.markdown(
                 "<div style='font-size:16px;font-weight:700;color:#1a1a1a;"
-                "font-family:Caveat,cursive;margin-bottom:10px'>✏️ Editar</div>",
+                "font-family:Caveat,cursive;margin:12px 0 8px'>✏️ Editar</div>",
                 unsafe_allow_html=True,
             )
-            from models import EstadoVenta as _EstadoVenta
-            estados_list = [e.value for e in _EstadoVenta]
-            current_estado = detalle_edit["estado"].value if hasattr(detalle_edit["estado"], "value") else str(detalle_edit["estado"])
-            new_estado = st.selectbox(
-                "Estado de la venta",
-                estados_list,
-                index=estados_list.index(current_estado) if current_estado in estados_list else 0,
-                key="sv_new_estado",
+
+            # ── Editor de productos ──
+            st.markdown(
+                "<div style='font-size:14px;font-weight:600;color:#555;"
+                "font-family:Caveat,cursive;margin-bottom:4px'>🛒 Productos vendidos</div>",
+                unsafe_allow_html=True,
             )
-            new_notas = st.text_area(
-                "Notas",
-                value=detalle_edit["notas"] or "",
-                key="sv_new_notas",
-                placeholder="Observaciones, correcciones, motivo del cambio…",
-                height=90,
+            st.markdown(
+                '<div style="font-size:12px;color:#aaa;font-family:Caveat,cursive;margin-bottom:6px">'
+                'Edita nombre, SKU, cantidad y precio. El stock <b>no se ajusta automáticamente</b> '
+                '— usa una compra/ajuste manual si es necesario.</div>',
+                unsafe_allow_html=True,
             )
 
-            if st.button("💾 Guardar cambios", type="primary", key="sv_guardar_edit"):
-                update_sale(engine, detalle_edit["id"], new_estado, new_notas or None)
-                get_sale_detail.clear()
-                get_all_sales.clear()
-                get_ventas_recientes.clear()
-                get_kpis.clear()
-                st.session_state.pop("sv_detalle_edit", None)
-                st.success(f"✅ Venta #{detalle_edit['id']} actualizada: estado → {new_estado}")
-                st.rerun()
+            catalogo_ed = get_sku_catalog(engine)
+            skus_ed = [""] + [f"{p['sku']} — {p['nombre']}" for p in catalogo_ed]
+            sku_map_ed = {"": None}
+            for p in catalogo_ed:
+                sku_map_ed[f"{p['sku']} — {p['nombre']}"] = p["sku"]
+            sku_display_ed = {p["sku"]: f"{p['sku']} — {p['nombre']}" for p in catalogo_ed}
+
+            import pandas as _pd_edit
+            rows_items = []
+            for it in detalle_edit["items"]:
+                sku_disp = sku_display_ed.get(it["sku"], "") if it["sku"] else ""
+                rows_items.append({
+                    "Producto": it["nombre_raw"],
+                    "SKU": sku_disp,
+                    "Cantidad": it["cantidad"],
+                    "Precio unit.": it["precio_unitario"],
+                })
+            df_items_edit = _pd_edit.DataFrame(rows_items) if rows_items else _pd_edit.DataFrame(
+                columns=["Producto", "SKU", "Cantidad", "Precio unit."]
+            )
+
+            df_items_result = st.data_editor(
+                df_items_edit,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="sv_items_editor",
+                column_config={
+                    "Producto": st.column_config.TextColumn("Producto", width="large"),
+                    "SKU": st.column_config.SelectboxColumn(
+                        "SKU en catálogo", options=skus_ed, width="large"
+                    ),
+                    "Cantidad": st.column_config.NumberColumn(
+                        "Cantidad", min_value=1, step=1, width="small"
+                    ),
+                    "Precio unit.": st.column_config.NumberColumn(
+                        "Precio unit. (COP)", min_value=0, step=1000,
+                        format="$ %d", width="medium"
+                    ),
+                },
+            )
+
+            # Total preview
+            try:
+                nuevo_subtotal = int(
+                    (df_items_result["Cantidad"].fillna(1) *
+                     df_items_result["Precio unit."].fillna(0)).sum()
+                )
+                envi_actual = detalle_edit.get("costo_envio") or 0
+                desc_actual = detalle_edit.get("descuento") or 0
+                nuevo_total = max(nuevo_subtotal + envi_actual - desc_actual, 0)
+                st.markdown(
+                    f"<div style='text-align:right;font-size:15px;color:#555;"
+                    f"font-family:Caveat,cursive;margin:6px 0 12px'>"
+                    f"Subtotal: <b>{fmt_cop(nuevo_subtotal)}</b>"
+                    f"{f'  +  Envío: {fmt_cop(envi_actual)}' if envi_actual else ''}"
+                    f"{f'  −  Descuento: {fmt_cop(desc_actual)}' if desc_actual else ''}"
+                    f" &nbsp;→&nbsp; <span style='color:#1a1a1a;font-weight:700;font-size:18px'>"
+                    f"Total: {fmt_cop(nuevo_total)}</span></div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
+
+            st.markdown(
+                "<hr style='border:none;border-top:1px solid #e0ddd8;margin:4px 0 12px'>",
+                unsafe_allow_html=True,
+            )
+
+            # ── Estado y notas ──
+            from models import EstadoVenta as _EstadoVenta
+            estados_list = [e.value for e in _EstadoVenta]
+            current_estado = (
+                detalle_edit["estado"].value
+                if hasattr(detalle_edit["estado"], "value")
+                else str(detalle_edit["estado"])
+            )
+            ea1, ea2 = st.columns([1, 2])
+            with ea1:
+                new_estado = st.selectbox(
+                    "Estado",
+                    estados_list,
+                    index=estados_list.index(current_estado) if current_estado in estados_list else 0,
+                    key="sv_new_estado",
+                )
+            with ea2:
+                new_notas = st.text_area(
+                    "Notas",
+                    value=detalle_edit["notas"] or "",
+                    key="sv_new_notas",
+                    placeholder="Observaciones, correcciones, motivo del cambio…",
+                    height=80,
+                )
+
+            if st.button("💾 Guardar cambios", type="primary", key="sv_guardar_edit",
+                         use_container_width=True):
+                try:
+                    # Build items list from editor, filtering invalid rows
+                    items_to_save = []
+                    for _, row in df_items_result.iterrows():
+                        nombre = str(row.get("Producto") or "").strip()
+                        if not nombre:
+                            continue
+                        qty = row.get("Cantidad")
+                        precio = row.get("Precio unit.")
+                        try:
+                            qty = int(qty) if qty is not None and not _pd_edit.isna(qty) else 1
+                            precio = int(precio) if precio is not None and not _pd_edit.isna(precio) else 0
+                        except (ValueError, TypeError):
+                            qty, precio = 1, 0
+                        if qty <= 0:
+                            continue
+                        sku_raw = str(row.get("SKU") or "").strip()
+                        sku_val = sku_map_ed.get(sku_raw, None)
+                        items_to_save.append({
+                            "nombre_raw": nombre,
+                            "sku": sku_val,
+                            "cantidad": qty,
+                            "precio_unitario": precio,
+                        })
+
+                    if not items_to_save:
+                        st.warning("Debe haber al menos un producto con nombre válido.")
+                    else:
+                        update_sale_items(
+                            engine, detalle_edit["id"],
+                            items_to_save, new_estado, new_notas or None,
+                        )
+                        get_sale_detail.clear()
+                        get_all_sales.clear()
+                        get_ventas_recientes.clear()
+                        get_kpis.clear()
+                        get_top_productos.clear()
+                        st.session_state.pop("sv_detalle_edit", None)
+                        st.success(
+                            f"✅ Venta #{detalle_edit['id']} actualizada — "
+                            f"{len(items_to_save)} producto(s), total {fmt_cop(nuevo_total)}, "
+                            f"estado → {new_estado}"
+                        )
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
 
             st.markdown('</div>', unsafe_allow_html=True)
 

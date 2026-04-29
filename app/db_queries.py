@@ -613,6 +613,61 @@ def update_sale(engine, sale_id: int, new_estado: str, new_notas: Optional[str])
         s.commit()
 
 
+def update_sale_items(
+    engine,
+    sale_id: int,
+    items: list[dict],
+    new_estado: str,
+    new_notas: Optional[str],
+) -> None:
+    """
+    Replaces all venta_items of a sale and recalculates subtotal/total.
+
+    Keeps existing costo_envio and descuento; total = subtotal + envio - descuento.
+    Does NOT adjust stock — stock corrections must be done manually or via a compra.
+
+    Each item dict must have:
+        nombre_raw      str
+        sku             str | None
+        cantidad        int
+        precio_unitario int
+    """
+    from sqlalchemy import update as sql_update, delete as sql_delete
+    with Session(engine) as s:
+        sale = s.execute(select(Venta).where(Venta.id == sale_id)).scalar_one()
+
+        s.execute(sql_delete(VentaItem).where(VentaItem.venta_id == sale_id))
+
+        new_subtotal = 0
+        for item in items:
+            qty = max(int(item.get("cantidad") or 1), 1)
+            precio = max(int(item.get("precio_unitario") or 0), 0)
+            item_sub = qty * precio
+            new_subtotal += item_sub
+            s.add(VentaItem(
+                venta_id=sale_id,
+                sku=item.get("sku") or None,
+                producto_nombre_raw=str(item["nombre_raw"]).strip() or "—",
+                cantidad=qty,
+                precio_unitario=precio,
+                subtotal=item_sub,
+            ))
+
+        new_total = max(new_subtotal + (sale.costo_envio or 0) - (sale.descuento or 0), 0)
+
+        s.execute(
+            sql_update(Venta)
+            .where(Venta.id == sale_id)
+            .values(
+                subtotal=new_subtotal,
+                total=new_total,
+                estado=new_estado,
+                notas=new_notas,
+            )
+        )
+        s.commit()
+
+
 # ---------------------------------------------------------------------------
 # Backward-compatible aliases (used by streamlit_app and legacy scripts)
 # ---------------------------------------------------------------------------
