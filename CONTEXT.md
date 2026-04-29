@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Generado el 2026-04-28. Actualizar al final de cada sesión relevante.
+> Actualizado el 2026-04-29.
 
 ---
 
@@ -189,9 +189,10 @@ guardar_compra.save_purchase()
 | Página | Ruta `current_page` | Descripción |
 |---|---|---|
 | Nueva Venta | `nueva_venta` | Textarea → parsear → previsualizar → confirmar |
-| Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 10 productos, últimas ventas |
+| Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 10 productos, últimas ventas, dinero por cuenta, visor de venta completa |
 | Inventario | `inventario` | Tabs: Catálogo / Alertas stock / Combos / Hot Products |
 | Compras | `compras` | Tabs: Nueva Compra / Historial |
+| Ventas | `ventas` | Tabs: Historial filtrable / Editar venta (estado + notas) |
 
 ---
 
@@ -227,6 +228,32 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 - Inventario con alertas de stock negativo y bajo (slider)
 - Combos: stock virtual, alertas de componentes faltantes, marcar como resuelta
 - Sistema de estilos con fuente Caveat y tema marrón/canvas configurable por env vars
+
+### 🔀 Rama `updates` (en testing — no mergear hasta validar)
+Commit `656fad4`. Cuatro mejoras implementadas:
+
+1. **Mostrador de venta completa (Dashboard):** sección "🔍 Ver venta completa" debajo de Últimas Ventas. Se ingresa un ID y se despliega el detalle completo: canal, cliente (nombre, CC, teléfono), items con SKU y precios, totales, método de pago + cuenta destino, envío, info Rappi, mensaje original.
+
+2. **Manejo de None en compras:** antes de persistir, el DataFrame del `data_editor` se limpia:
+   - Columna SKU: `None`/`NaN` → `""` (sin SKU asignado), no bloquea el guardado.
+   - Se descartan filas sin `producto_nombre_raw` o con nombre vacío.
+   - Se descartan filas con `cantidad` nula, no numérica o ≤ 0.
+   - Si no queda ninguna fila válida, muestra aviso en lugar de intentar guardar.
+
+3. **Página Ventas (auditador/corrector):** nueva ruta `ventas` en el sidebar.
+   - Tab "Historial": lista filtrable por rango de fechas, estado y canal; visor de detalle inline por ID.
+   - Tab "Editar venta": busca por ID → muestra detalle completo → permite cambiar `estado` y `notas` → guarda con `update_sale()`.
+
+4. **Dinero por cuenta en Dashboard:** expander colapsable "💳 Dinero por cuenta / método de pago" que muestra, para el período seleccionado, el total acumulado por método + cuenta destino (Nequi, Bancolombia Colsports, etc.) con número de ventas.
+
+Nuevas funciones en `db_queries.py`:
+- `get_sale_detail(engine, sale_id)` → `dict` con todas las relaciones de una venta.
+- `get_money_by_account(engine, start, end)` → `DataFrame` agrupado por método + cuenta.
+- `get_all_sales(engine, start, end, estado, canal_nombre)` → `DataFrame` filtrable para el auditador.
+- `update_sale(engine, sale_id, new_estado, new_notas)` → escribe directo, sin cache.
+
+Nueva función helper en `streamlit_app.py`:
+- `_render_sale_detail(detalle)` → renderiza el dict de detalle; compartido entre Dashboard y página Ventas.
 
 ### 🔀 Rama `CombosManage` (pendiente de merge)
 - Mejora de `_match_sku`: también busca en campo `alias` (nombres alternativos) por producto.
@@ -288,8 +315,8 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 ## 14. Roadmap (próximas funcionalidades)
 
 ### Prioridad alta
+- **Merge `updates` → main** una vez validado en testing.
 - **Merge CombosManage → main** + migración `alias` en DB.
-- **Edición de ventas:** cambiar estado (pendiente → confirmada → despachada → entregada → cancelada) desde la app.
 - **Resumen de ventas del día:** vista rápida para cierre diario.
 
 ### Prioridad media
@@ -315,3 +342,5 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 | Nombres de campos Pydantic en español | Los JSON keys deben coincidir con lo que el LLM retorna; cambiarlos rompería el prompt |
 | Aliases backward-compatible en todos los módulos | Permite renombrar funciones sin romper código existente o tests |
 | `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra; agregar `__pycache__/` al `.gitignore` si no está |
+| `st.stop()` no va dentro de `try/except` | En Streamlit, `StopException` hereda de `BaseException`; un `except Exception` genérico puede capturarlo y silenciarlo. Usar bloque `else` en su lugar. |
+| Limpieza del `data_editor` antes de persistir | El widget puede generar filas vacías si el usuario desplaza horizontalmente y toca campos vacíos. Siempre filtrar `NaN`, strings vacíos y cantidades ≤ 0 antes de llamar a `save_purchase`. |
