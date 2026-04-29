@@ -20,7 +20,7 @@ sys.path.insert(0, _root)
 
 from models import (
     Venta, VentaItem, Producto, Canal, Pago, Cliente, EstadoVenta,
-    ComboComponente, AlertaPedido, Compra, DetalleCompra,
+    ComboComponente, AlertaPedido, Compra, DetalleCompra, Envio, RappiDetalle,
 )
 
 
@@ -449,6 +449,168 @@ def get_sku_catalog(_engine) -> list[dict]:
             select(Producto.sku, Producto.nombre).order_by(Producto.nombre)
         ).all()
     return [{"sku": r.sku, "nombre": r.nombre} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Sale detail (single sale, all relations loaded)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def get_sale_detail(_engine, sale_id: int) -> Optional[dict]:
+    """Returns all fields of a single sale: items, client, payments, shipping, rappi."""
+    with Session(_engine) as s:
+        sale = s.execute(select(Venta).where(Venta.id == sale_id)).scalar_one_or_none()
+        if not sale:
+            return None
+
+        canal = s.execute(select(Canal).where(Canal.id == sale.canal_id)).scalar_one_or_none()
+        cliente = None
+        if sale.cliente_id:
+            cliente = s.execute(select(Cliente).where(Cliente.id == sale.cliente_id)).scalar_one_or_none()
+
+        item_rows = s.execute(
+            select(VentaItem, Producto)
+            .outerjoin(Producto, VentaItem.sku == Producto.sku)
+            .where(VentaItem.venta_id == sale_id)
+        ).all()
+
+        pagos = s.execute(select(Pago).where(Pago.venta_id == sale_id)).scalars().all()
+        envio = s.execute(select(Envio).where(Envio.venta_id == sale_id)).scalar_one_or_none()
+        rappi = s.execute(select(RappiDetalle).where(RappiDetalle.venta_id == sale_id)).scalar_one_or_none()
+
+        return {
+            "id": sale.id,
+            "fecha": sale.fecha,
+            "canal": canal.nombre if canal else "—",
+            "estado": sale.estado,
+            "cliente_nombre": sale.cliente_nombre_raw or (cliente.nombre if cliente else None),
+            "cliente_cedula": cliente.cedula if cliente else None,
+            "cliente_telefono": cliente.telefono if cliente else None,
+            "subtotal": sale.subtotal,
+            "costo_envio": sale.costo_envio,
+            "descuento": sale.descuento,
+            "total": sale.total,
+            "notas": sale.notas,
+            "fuente_referido": sale.fuente_referido,
+            "mensaje_original": sale.mensaje_original,
+            "items": [
+                {
+                    "nombre_raw": it.producto_nombre_raw,
+                    "sku": it.sku,
+                    "nombre_catalogo": prod.nombre if prod else None,
+                    "cantidad": it.cantidad,
+                    "precio_unitario": it.precio_unitario,
+                    "subtotal": it.subtotal,
+                }
+                for it, prod in item_rows
+            ],
+            "pagos": [
+                {
+                    "metodo": p.metodo,
+                    "cuenta_destino": p.cuenta_destino,
+                    "monto": p.monto,
+                    "referencia": p.referencia,
+                }
+                for p in pagos
+            ],
+            "envio": {
+                "direccion": envio.direccion,
+                "ciudad": envio.ciudad,
+                "departamento": envio.departamento,
+            } if envio else None,
+            "rappi": {
+                "order_id": rappi.order_id,
+                "tipo": rappi.tipo,
+                "comision_porcentaje": rappi.comision_porcentaje,
+                "comision_monto": rappi.comision_monto,
+            } if rappi else None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Money by payment account — for dashboard
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=120)
+def get_money_by_account(_engine, start: date, end: date) -> pd.DataFrame:
+    """Totals per payment method + account within the given date range."""
+    with Session(_engine) as s:
+        rows = s.execute(
+            select(
+                Pago.metodo.label("Método"),
+                Pago.cuenta_destino.label("Cuenta"),
+                func.count(Venta.id).label("Ventas"),
+                func.coalesce(func.sum(Venta.total), 0).label("Total"),
+            )
+            .join(Venta, Pago.venta_id == Venta.id)
+            .where(func.date(Venta.fecha) >= start)
+            .where(func.date(Venta.fecha) <= end)
+            .where(Venta.estado != EstadoVenta.cancelada)
+            .group_by(Pago.metodo, Pago.cuenta_destino)
+            .order_by(desc("Total"))
+        ).all()
+    return pd.DataFrame(rows, columns=["Método", "Cuenta", "Ventas", "Total"])
+
+
+# ---------------------------------------------------------------------------
+# Sales list for the auditor page
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def get_all_sales(
+    _engine,
+    start: date,
+    end: date,
+    estado: Optional[str] = None,
+    canal_nombre: Optional[str] = None,
+    limit: int = 100,
+) -> pd.DataFrame:
+    """Filterable sales list used by the auditor/editor page."""
+    with Session(_engine) as s:
+        q = (
+            select(
+                Venta.id,
+                Venta.fecha,
+                Canal.nombre.label("Canal"),
+                func.coalesce(Venta.cliente_nombre_raw, "—").label("Cliente"),
+                Venta.subtotal,
+                Venta.total,
+                Venta.estado,
+                Pago.metodo.label("Pago"),
+                Pago.cuenta_destino.label("Cuenta"),
+                Venta.notas,
+            )
+            .join(Canal, Venta.canal_id == Canal.id)
+            .outerjoin(Pago, Pago.venta_id == Venta.id)
+            .where(func.date(Venta.fecha) >= start)
+            .where(func.date(Venta.fecha) <= end)
+        )
+        if estado:
+            q = q.where(Venta.estado == estado)
+        if canal_nombre:
+            q = q.where(Canal.nombre == canal_nombre)
+        q = q.order_by(desc(Venta.fecha)).limit(limit)
+        rows = s.execute(q).all()
+
+    df = pd.DataFrame(rows, columns=["ID", "Fecha", "Canal", "Cliente", "Bruto", "Total", "Estado", "Pago", "Cuenta", "Notas"])
+    if not df.empty:
+        df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.strftime("%d/%m/%Y %H:%M")
+        df["Total_num"] = df["Total"]
+        df["Total"] = df["Total"].apply(lambda x: f"${int(x):,}".replace(",", "."))
+        df["Bruto"] = df["Bruto"].apply(lambda x: f"${int(x):,}".replace(",", "."))
+    return df
+
+
+def update_sale(engine, sale_id: int, new_estado: str, new_notas: Optional[str]) -> None:
+    """Updates estado and notas of a sale. Direct write, no cache."""
+    from sqlalchemy import update as sql_update
+    with Session(engine) as s:
+        s.execute(
+            sql_update(Venta)
+            .where(Venta.id == sale_id)
+            .values(estado=new_estado, notas=new_notas)
+        )
+        s.commit()
 
 
 # ---------------------------------------------------------------------------

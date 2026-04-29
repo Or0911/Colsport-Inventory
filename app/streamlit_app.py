@@ -262,6 +262,7 @@ from app.db_queries import (
     get_combo_virtual_stock, get_order_alerts, mark_alert_resolved,
     get_recent_purchases, get_sku_catalog,
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
+    get_sale_detail, get_money_by_account, get_all_sales, update_sale,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
@@ -292,6 +293,7 @@ def init_session():
         "parsed_sale": None,
         "sale_montos": None,
         "last_venta_id": None,
+        "sv_detalle_edit": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -421,12 +423,13 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
 
-        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒"}
+        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒", "ventas": "📋"}
         labels = {
             "nueva_venta": "Nueva Venta",
             "dashboard": "Dashboard",
             "inventario": "Inventario",
             "compras": "Compras",
+            "ventas": "Ventas",
         }
         for page, label in labels.items():
             if st.button(f"{icons[page]}  {label}", key=f"nav_{page}",
@@ -673,6 +676,112 @@ def page_new_sale(engine):
 
 
 # ---------------------------------------------------------------------------
+# Shared helper: render a sale detail dict (used in Dashboard and Ventas page)
+# ---------------------------------------------------------------------------
+
+def _render_sale_detail(detalle: dict):
+    canal_color = CANAL_COLORS.get(detalle["canal"], "#555")
+    st.markdown(
+        f'<span class="badge" style="color:{canal_color};border-color:{canal_color}">'
+        f'{detalle["canal"]}</span>'
+        f'&nbsp;<span style="font-size:13px;color:#aaa;font-family:Caveat,cursive">'
+        f'#{detalle["id"]} · {detalle["fecha"].strftime("%d/%m/%Y %H:%M") if detalle["fecha"] else "—"}'
+        f' · <b>{detalle["estado"]}</b></span>',
+        unsafe_allow_html=True,
+    )
+
+    # Client
+    nombre = detalle["cliente_nombre"] or "—"
+    cedula = detalle["cliente_cedula"] or ""
+    telefono = detalle["cliente_telefono"] or ""
+    st.markdown(
+        f'<div style="font-size:13px;color:#777;font-family:Caveat,cursive;margin:4px 0 10px">'
+        f'👤 <b>{nombre}</b>'
+        f'{" · CC " + cedula if cedula else ""}'
+        f'{" · " + telefono if telefono else ""}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Items
+    st.markdown(
+        "<div style='font-size:14px;font-weight:600;color:#555;"
+        "font-family:Caveat,cursive;margin-bottom:4px'>🛒 Productos</div>",
+        unsafe_allow_html=True,
+    )
+    for it in detalle["items"]:
+        nombre_prod = it["nombre_catalogo"] or it["nombre_raw"]
+        sku_txt = f' <span style="color:#bbb;font-size:12px">[{it["sku"]}]</span>' if it["sku"] else ""
+        precio = fmt_cop(it["precio_unitario"])
+        subtotal = fmt_cop(it["subtotal"])
+        st.markdown(
+            f'<div style="background:#f5f2eb;border:1.5px solid #e0ddd8;border-radius:2px;'
+            f'padding:6px 12px;margin:2px 0;font-size:13px;font-family:Caveat,cursive">'
+            f'<b>{it["cantidad"]}×</b> {nombre_prod}{sku_txt}'
+            f' <span style="float:right;color:#555">{precio} c/u = <b>{subtotal}</b></span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Totals
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #e0ddd8;margin:10px 0'>",
+        unsafe_allow_html=True,
+    )
+    tc1, tc2, tc3 = st.columns(3)
+    tc1.metric("Bruto", fmt_cop(detalle["subtotal"]))
+    if detalle["costo_envio"]:
+        tc2.metric("Envío", fmt_cop(detalle["costo_envio"]))
+    if detalle["descuento"]:
+        tc2.metric("Descuento", fmt_cop(detalle["descuento"]))
+    tc3.metric("Neto", fmt_cop(detalle["total"]))
+
+    # Payment
+    for pago in detalle["pagos"]:
+        cuenta = f" › {pago['cuenta_destino']}" if pago["cuenta_destino"] else ""
+        ref = f" · Ref: {pago['referencia']}" if pago["referencia"] else ""
+        st.markdown(
+            f'<div style="font-size:13px;color:#555;font-family:Caveat,cursive;margin-top:4px">'
+            f'💳 <b>{pago["metodo"]}</b>{cuenta}{ref}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Shipping
+    if detalle["envio"]:
+        e = detalle["envio"]
+        partes = [x for x in [e.get("direccion"), e.get("ciudad"), e.get("departamento")] if x]
+        if partes:
+            st.markdown(
+                f'<div style="font-size:13px;color:#555;font-family:Caveat,cursive;margin-top:4px">'
+                f'📦 {" · ".join(partes)}</div>',
+                unsafe_allow_html=True,
+            )
+
+    # Rappi
+    if detalle["rappi"]:
+        r = detalle["rappi"]
+        st.markdown(
+            f'<div style="font-size:13px;color:#FF441F;font-family:Caveat,cursive;margin-top:4px">'
+            f'🛵 Rappi {r["tipo"]} · Orden {r["order_id"]} · '
+            f'Comisión {r["comision_porcentaje"]}% = {fmt_cop(r["comision_monto"] or 0)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if detalle["notas"]:
+        st.info(f"📝 {detalle['notas']}")
+
+    if detalle["fuente_referido"]:
+        st.markdown(
+            f'<div style="font-size:13px;color:#777;font-family:Caveat,cursive">📣 Referido: {detalle["fuente_referido"]}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if detalle["mensaje_original"]:
+        with st.expander("📄 Mensaje original"):
+            st.text(detalle["mensaje_original"])
+
+
+# ---------------------------------------------------------------------------
 # PÁGINA: DASHBOARD
 # ---------------------------------------------------------------------------
 
@@ -769,13 +878,44 @@ def page_dashboard(engine):
         )
         st.plotly_chart(chart_top_productos(df_top), use_container_width=True)
 
+    # ── Money by account (discreet) ──
+    df_cuentas = get_money_by_account(engine, start_date, end_date)
+    if not df_cuentas.empty:
+        with st.expander("💳 Dinero por cuenta / método de pago", expanded=False):
+            st.markdown(
+                '<div style="font-size:13px;color:#aaa;font-family:Caveat,cursive;margin-bottom:10px">'
+                'Total recibido por método y cuenta destino en el período seleccionado</div>',
+                unsafe_allow_html=True,
+            )
+            cols_cnt = st.columns(min(len(df_cuentas), 4))
+            for i, (_, row) in enumerate(df_cuentas.iterrows()):
+                col = cols_cnt[i % 4]
+                cuenta_label = row["Cuenta"] if row["Cuenta"] else row["Método"]
+                metodo_label = row["Método"] if row["Cuenta"] else ""
+                total_fmt = f"${int(row['Total']):,}".replace(",", ".")
+                col.markdown(
+                    f'<div class="cs-card" style="padding:10px 14px;margin-bottom:6px">'
+                    f'<div style="font-size:11px;color:#999;font-family:Caveat,cursive">'
+                    f'{metodo_label}</div>'
+                    f'<div style="font-size:14px;font-weight:700;color:#1a1a1a;font-family:Caveat,cursive">'
+                    f'{cuenta_label}</div>'
+                    f'<div style="font-size:20px;font-weight:700;color:#5aaa88;font-family:Caveat,cursive">'
+                    f'{total_fmt}</div>'
+                    f'<div style="font-size:11px;color:#bbb;font-family:Caveat,cursive">'
+                    f'{int(row["Ventas"])} ventas</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
     # ── Recent sales ──
     st.markdown(
         '<div class="cs-section-title" style="font-size:15px;border-bottom:1px solid #e0ddd8;'
         'margin-bottom:8px">Últimas Ventas</div>',
         unsafe_allow_html=True,
     )
-    df_rec = get_recent_sales(engine, limit=10)
+    df_rec = get_recent_sales(engine, limit=15)
     if df_rec.empty:
         st.markdown(
             '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
@@ -785,6 +925,29 @@ def page_dashboard(engine):
         )
     else:
         st.dataframe(df_rec, use_container_width=True, hide_index=True)
+
+    # ── Sale detail viewer ──
+    st.markdown(
+        '<div class="cs-section-title" style="font-size:15px;border-bottom:1px solid #e0ddd8;'
+        'margin-top:16px;margin-bottom:8px">🔍 Ver venta completa</div>',
+        unsafe_allow_html=True,
+    )
+    col_id, col_btn = st.columns([2, 1])
+    with col_id:
+        venta_id_input = st.number_input(
+            "ID de venta", min_value=1, step=1,
+            key="dash_venta_id", label_visibility="collapsed",
+            placeholder="Ingresa el ID de la venta…",
+        )
+    with col_btn:
+        ver_btn = st.button("Ver detalle", key="dash_ver_venta", use_container_width=True)
+
+    if ver_btn and venta_id_input:
+        detalle = get_sale_detail(engine, int(venta_id_input))
+        if detalle is None:
+            st.warning(f"No existe ninguna venta con ID #{int(venta_id_input)}")
+        else:
+            _render_sale_detail(detalle)
 
 
 # ---------------------------------------------------------------------------
@@ -1236,8 +1399,12 @@ def page_purchases(engine):
                     with st.spinner("Guardando compra y actualizando stock..."):
                         try:
                             df_save = df_resultado.copy()
+
+                            # Normalise SKU column — replace None/NaN with ""
+                            df_save["SKU en catálogo"] = df_save["SKU en catálogo"].fillna("")
+
                             df_save["sku"] = df_save["SKU en catálogo"].map(
-                                lambda v: sku_map.get(v, None)
+                                lambda v: sku_map.get(str(v).strip(), None) if str(v).strip() else None
                             )
                             df_save = df_save.rename(columns={
                                 "Producto (del proveedor)": "producto_nombre_raw",
@@ -1245,27 +1412,38 @@ def page_purchases(engine):
                                 "Costo unitario (COP)": "precio_costo_unitario",
                             })[["producto_nombre_raw", "sku", "cantidad", "precio_costo_unitario"]]
 
-                            from sqlalchemy.orm import Session as DBSession2
-                            from api.guardar_compra import save_purchase
-                            with DBSession2(engine) as session:
-                                compra_obj = save_purchase(
-                                    session, proveedor or None, df_save
-                                )
-                                session.commit()
-                                compra_id = compra_obj.id
+                            # Drop rows that are empty or came from accidental selection
+                            df_save = df_save.dropna(subset=["producto_nombre_raw"])
+                            df_save = df_save[df_save["producto_nombre_raw"].astype(str).str.strip() != ""]
+                            df_save = df_save.dropna(subset=["cantidad"])
+                            df_save["cantidad"] = pd.to_numeric(df_save["cantidad"], errors="coerce")
+                            df_save = df_save[df_save["cantidad"].notna() & (df_save["cantidad"] > 0)]
+                            df_save["cantidad"] = df_save["cantidad"].astype(int)
 
-                            st.session_state["compra_guardada"] = True
-                            st.session_state["last_compra_id"] = compra_id
-                            st.session_state["purchase_msg_v"] += 1
+                            if df_save.empty:
+                                st.warning("No hay filas válidas. Revisa que cada producto tenga nombre y cantidad > 0.")
+                            else:
+                                from sqlalchemy.orm import Session as DBSession2
+                                from api.guardar_compra import save_purchase
+                                with DBSession2(engine) as session:
+                                    compra_obj = save_purchase(
+                                        session, proveedor or None, df_save
+                                    )
+                                    session.commit()
+                                    compra_id = compra_obj.id
 
-                            get_inventario.clear()
-                            get_alertas_stock.clear()
-                            get_pedidos_sin_stock.clear()
-                            get_combos_stock_virtual.clear()
-                            get_compras_recientes.clear()
-                            get_kpis.clear()
+                                st.session_state["compra_guardada"] = True
+                                st.session_state["last_compra_id"] = compra_id
+                                st.session_state["purchase_msg_v"] += 1
 
-                            st.rerun()
+                                get_inventario.clear()
+                                get_alertas_stock.clear()
+                                get_pedidos_sin_stock.clear()
+                                get_combos_stock_virtual.clear()
+                                get_compras_recientes.clear()
+                                get_kpis.clear()
+
+                                st.rerun()
                         except Exception as e:
                             st.error(f"Error al guardar: {e}")
 
@@ -1286,6 +1464,133 @@ def page_purchases(engine):
             )
         else:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# PÁGINA: VENTAS (Historial + Auditador/Corrector)
+# ---------------------------------------------------------------------------
+
+def page_sales(engine):
+    st.markdown('<div class="cs-section-title">📋 Ventas</div>', unsafe_allow_html=True)
+
+    tab_hist, tab_editor = st.tabs(["📜 Historial", "✏️ Editar venta"])
+
+    # ── Tab 1: Historial filtrable ──
+    with tab_hist:
+        st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+        fc1, fc2, fc3, fc4 = st.columns([1, 1, 1, 1])
+        with fc1:
+            f_start = st.date_input("Desde", value=date.today() - timedelta(days=29), key="sv_start")
+        with fc2:
+            f_end = st.date_input("Hasta", value=date.today(), key="sv_end")
+        with fc3:
+            estados_opts = ["Todos"] + [e.value for e in __import__("models", fromlist=["EstadoVenta"]).EstadoVenta]
+            f_estado = st.selectbox("Estado", estados_opts, key="sv_estado")
+        with fc4:
+            canales_opts = ["Todos"] + list(CANAL_COLORS.keys())
+            f_canal = st.selectbox("Canal", canales_opts, key="sv_canal")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        df_ventas = get_all_sales(
+            engine,
+            f_start, f_end,
+            estado=None if f_estado == "Todos" else f_estado,
+            canal_nombre=None if f_canal == "Todos" else f_canal,
+        )
+
+        if df_ventas.empty:
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Caveat,cursive">'
+                'No hay ventas con esos filtros.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div style="font-size:13px;color:#aaa;font-family:Caveat,cursive;margin-bottom:8px">'
+                f'{len(df_ventas)} ventas encontradas</div>',
+                unsafe_allow_html=True,
+            )
+            cols_show = ["ID", "Fecha", "Canal", "Cliente", "Bruto", "Total", "Estado", "Pago", "Cuenta"]
+            st.dataframe(df_ventas[cols_show], use_container_width=True, hide_index=True)
+
+            # Quick detail viewer inline
+            st.markdown(
+                "<div style='font-size:13px;color:#aaa;font-family:Caveat,cursive;margin-top:12px'>"
+                "Ingresa un ID de la lista para ver el detalle completo:</div>",
+                unsafe_allow_html=True,
+            )
+            sv_id = st.number_input("ID venta (historial)", min_value=1, step=1, key="sv_hist_id",
+                                    label_visibility="collapsed")
+            if st.button("Ver detalle", key="sv_hist_ver"):
+                detalle = get_sale_detail(engine, int(sv_id))
+                if detalle is None:
+                    st.warning(f"No existe venta #{int(sv_id)}")
+                else:
+                    with st.container():
+                        st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+                        _render_sale_detail(detalle)
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Tab 2: Editar / corregir venta ──
+    with tab_editor:
+        st.markdown(
+            '<div style="font-size:14px;color:#777;font-family:Caveat,cursive;margin-bottom:12px">'
+            'Busca una venta por ID para corregir su estado o agregar/editar notas.</div>',
+            unsafe_allow_html=True,
+        )
+
+        ec1, ec2 = st.columns([1, 2])
+        with ec1:
+            edit_id = st.number_input("ID de la venta a editar", min_value=1, step=1,
+                                      key="sv_edit_id", label_visibility="visible")
+            buscar_btn = st.button("🔍 Buscar", key="sv_buscar_btn", use_container_width=True)
+
+        if buscar_btn:
+            st.session_state["sv_detalle_edit"] = get_sale_detail(engine, int(edit_id))
+
+        detalle_edit = st.session_state.get("sv_detalle_edit")
+
+        if detalle_edit is None and buscar_btn:
+            st.warning(f"No existe venta #{int(edit_id)}")
+        elif detalle_edit:
+            st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+            _render_sale_detail(detalle_edit)
+            st.markdown("<hr style='border:none;border-top:1px solid #e0ddd8;margin:14px 0'>", unsafe_allow_html=True)
+
+            st.markdown(
+                "<div style='font-size:16px;font-weight:700;color:#1a1a1a;"
+                "font-family:Caveat,cursive;margin-bottom:10px'>✏️ Editar</div>",
+                unsafe_allow_html=True,
+            )
+            from models import EstadoVenta as _EstadoVenta
+            estados_list = [e.value for e in _EstadoVenta]
+            current_estado = detalle_edit["estado"].value if hasattr(detalle_edit["estado"], "value") else str(detalle_edit["estado"])
+            new_estado = st.selectbox(
+                "Estado de la venta",
+                estados_list,
+                index=estados_list.index(current_estado) if current_estado in estados_list else 0,
+                key="sv_new_estado",
+            )
+            new_notas = st.text_area(
+                "Notas",
+                value=detalle_edit["notas"] or "",
+                key="sv_new_notas",
+                placeholder="Observaciones, correcciones, motivo del cambio…",
+                height=90,
+            )
+
+            if st.button("💾 Guardar cambios", type="primary", key="sv_guardar_edit"):
+                update_sale(engine, detalle_edit["id"], new_estado, new_notas or None)
+                get_sale_detail.clear()
+                get_all_sales.clear()
+                get_ventas_recientes.clear()
+                get_kpis.clear()
+                st.session_state.pop("sv_detalle_edit", None)
+                st.success(f"✅ Venta #{detalle_edit['id']} actualizada: estado → {new_estado}")
+                st.rerun()
+
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1311,6 +1616,8 @@ def main():
         page_inventory(engine)
     elif page == "compras":
         page_purchases(engine)
+    elif page == "ventas":
+        page_sales(engine)
 
 
 if __name__ == "__main__":
