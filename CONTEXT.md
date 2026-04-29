@@ -230,7 +230,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 - Sistema de estilos con fuente Caveat y tema marrón/canvas configurable por env vars
 
 ### 🔀 Rama `updates` (en testing — no mergear hasta validar)
-Commit `656fad4`. Cuatro mejoras implementadas:
+Commit `6e5cf8e`. Cinco mejoras implementadas:
 
 1. **Mostrador de venta completa (Dashboard):** sección "🔍 Ver venta completa" debajo de Últimas Ventas. Se ingresa un ID y se despliega el detalle completo: canal, cliente (nombre, CC, teléfono), items con SKU y precios, totales, método de pago + cuenta destino, envío, info Rappi, mensaje original.
 
@@ -242,15 +242,20 @@ Commit `656fad4`. Cuatro mejoras implementadas:
 
 3. **Página Ventas (auditador/corrector):** nueva ruta `ventas` en el sidebar.
    - Tab "Historial": lista filtrable por rango de fechas, estado y canal; visor de detalle inline por ID.
-   - Tab "Editar venta": busca por ID → muestra detalle completo → permite cambiar `estado` y `notas` → guarda con `update_sale()`.
+   - Tab "Editar venta": busca por ID → venta actual colapsada como referencia → `data_editor` con productos (nombre libre, SKU selectbox, cantidad, precio unit.) → preview de total en tiempo real → estado y notas → guardar.
+   - Al guardar: reemplaza `venta_items`, recalcula `subtotal` y `total` (conserva `costo_envio` + `descuento` originales), actualiza `estado` y `notas` en una sola transacción.
+   - El stock **no se ajusta automáticamente** al editar items; el aviso aparece en la UI.
 
 4. **Dinero por cuenta en Dashboard:** expander colapsable "💳 Dinero por cuenta / método de pago" que muestra, para el período seleccionado, el total acumulado por método + cuenta destino (Nequi, Bancolombia Colsports, etc.) con número de ventas.
+
+5. **Editor de productos de venta:** el auditador permite editar los productos vendidos y sus precios directamente desde la app sin tocar la DB a mano.
 
 Nuevas funciones en `db_queries.py`:
 - `get_sale_detail(engine, sale_id)` → `dict` con todas las relaciones de una venta.
 - `get_money_by_account(engine, start, end)` → `DataFrame` agrupado por método + cuenta.
 - `get_all_sales(engine, start, end, estado, canal_nombre)` → `DataFrame` filtrable para el auditador.
 - `update_sale(engine, sale_id, new_estado, new_notas)` → escribe directo, sin cache.
+- `update_sale_items(engine, sale_id, items, new_estado, new_notas)` → reemplaza items, recalcula totales, actualiza estado/notas.
 
 Nueva función helper en `streamlit_app.py`:
 - `_render_sale_detail(detalle)` → renderiza el dict de detalle; compartido entre Dashboard y página Ventas.
