@@ -699,6 +699,44 @@ def update_sale_items(
 
 
 # ---------------------------------------------------------------------------
+# Purchase detail (single purchase, all line items loaded)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def get_purchase_detail(_engine, purchase_id: int) -> Optional[dict]:
+    """Returns all fields of a single purchase: header + line items with catalog names."""
+    with Session(_engine) as s:
+        compra = s.execute(select(Compra).where(Compra.id == purchase_id)).scalar_one_or_none()
+        if not compra:
+            return None
+
+        item_rows = s.execute(
+            select(DetalleCompra, Producto)
+            .outerjoin(Producto, DetalleCompra.producto_sku == Producto.sku)
+            .where(DetalleCompra.compra_id == purchase_id)
+        ).all()
+
+        return {
+            "id": compra.id,
+            "fecha": compra.fecha,
+            "proveedor": compra.proveedor or "—",
+            "monto_total": compra.monto_total,
+            "items": [
+                {
+                    "nombre_raw": dc.producto_nombre_raw,
+                    "sku": dc.producto_sku,
+                    "nombre_catalogo": prod.nombre if prod else None,
+                    "cantidad": dc.cantidad,
+                    "precio_costo_unitario": dc.precio_costo_unitario,
+                    "subtotal": (dc.cantidad * dc.precio_costo_unitario)
+                                if dc.precio_costo_unitario else None,
+                }
+                for dc, prod in item_rows
+            ],
+        }
+
+
+# ---------------------------------------------------------------------------
 # Backward-compatible aliases (used by streamlit_app and legacy scripts)
 # ---------------------------------------------------------------------------
 get_ventas_por_canal = get_sales_by_channel
