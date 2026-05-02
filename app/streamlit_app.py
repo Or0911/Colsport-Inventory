@@ -265,7 +265,7 @@ from app.db_queries import (
     get_recent_purchases, get_sku_catalog,
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
     get_sale_detail, get_money_by_account, get_all_sales, update_sale, update_sale_items,
-    get_kpis_period,
+    get_kpis_period, get_purchase_detail,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
@@ -784,6 +784,56 @@ def _render_sale_detail(detalle: dict):
     if detalle["mensaje_original"]:
         with st.expander("📄 Mensaje original"):
             st.text(detalle["mensaje_original"])
+
+
+# ---------------------------------------------------------------------------
+# Shared helper: render a purchase detail dict
+# ---------------------------------------------------------------------------
+
+def _render_purchase_detail(detalle: dict):
+    fecha_txt = detalle["fecha"].strftime("%d/%m/%Y %H:%M") if detalle["fecha"] else "—"
+    st.markdown(
+        f'<div style="font-size:14px;font-family:Poppins,sans-serif;margin-bottom:10px">'
+        f'🗓️ <b>{fecha_txt}</b> &nbsp;·&nbsp; '
+        f'Proveedor: <b>{detalle["proveedor"]}</b>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "<div style='font-size:14px;font-weight:600;color:#555;"
+        "font-family:Poppins,sans-serif;margin-bottom:4px'>📦 Productos comprados</div>",
+        unsafe_allow_html=True,
+    )
+
+    total_calculado = 0
+    for it in detalle["items"]:
+        nombre = it["nombre_catalogo"] or it["nombre_raw"]
+        sku_txt = (
+            f' <span style="color:#bbb;font-size:12px">[{it["sku"]}]</span>'
+            if it["sku"] else ""
+        )
+        costo_txt = fmt_cop(it["precio_costo_unitario"]) if it["precio_costo_unitario"] else "—"
+        sub_txt   = fmt_cop(it["subtotal"]) if it["subtotal"] else "—"
+        if it["subtotal"]:
+            total_calculado += it["subtotal"]
+        st.markdown(
+            f'<div style="background:#f5f2eb;border:1.5px solid #e0ddd8;border-radius:2px;'
+            f'padding:6px 12px;margin:2px 0;font-size:13px;font-family:Poppins,sans-serif">'
+            f'<b>{it["cantidad"]}×</b> {nombre}{sku_txt}'
+            f'<span style="float:right;color:#555">{costo_txt} c/u = <b>{sub_txt}</b></span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #e0ddd8;margin:10px 0'>",
+        unsafe_allow_html=True,
+    )
+    tc1, tc2 = st.columns(2)
+    tc1.metric("Total calculado", fmt_cop(total_calculado))
+    if detalle["monto_total"]:
+        tc2.metric("Total registrado", fmt_cop(detalle["monto_total"]))
 
 
 # ---------------------------------------------------------------------------
@@ -1425,6 +1475,30 @@ def page_purchases(engine):
             )
         else:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
+
+            st.markdown(
+                "<div style='font-size:13px;color:#aaa;font-family:Poppins,sans-serif;margin-top:12px'>"
+                "Ingresa un ID de la lista para ver el detalle completo:</div>",
+                unsafe_allow_html=True,
+            )
+            ch1, ch2 = st.columns([2, 1])
+            with ch1:
+                compra_id_input = st.number_input(
+                    "ID compra", min_value=1, step=1, key="ch_hist_id",
+                    label_visibility="collapsed",
+                )
+            with ch2:
+                ver_compra_btn = st.button("Ver detalle", key="ch_hist_ver",
+                                           use_container_width=True)
+
+            if ver_compra_btn and compra_id_input:
+                detalle_c = get_purchase_detail(engine, int(compra_id_input))
+                if detalle_c is None:
+                    st.warning(f"No existe ninguna compra con ID #{int(compra_id_input)}")
+                else:
+                    st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+                    _render_purchase_detail(detalle_c)
+                    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
