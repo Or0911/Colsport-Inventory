@@ -601,6 +601,36 @@ def get_all_sales(
     return df
 
 
+@st.cache_data(ttl=60)
+def get_kpis_period(_engine, start: date, end: date) -> dict:
+    """Sales + purchase KPIs aggregated for an arbitrary date range (dashboard filter)."""
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt   = datetime.combine(end,   datetime.max.time())
+    with Session(_engine) as s:
+        v = s.execute(
+            select(
+                func.count(Venta.id),
+                func.coalesce(func.sum(Venta.subtotal), 0),
+                func.coalesce(func.sum(Venta.total), 0),
+            )
+            .where(Venta.estado != EstadoVenta.cancelada)
+            .where(Venta.fecha >= start_dt)
+            .where(Venta.fecha <= end_dt)
+        ).one()
+        c = s.execute(
+            select(
+                func.count(Compra.id),
+                func.coalesce(func.sum(Compra.monto_total), 0),
+            )
+            .where(Compra.fecha >= start_dt)
+            .where(Compra.fecha <= end_dt)
+        ).one()
+    return {
+        "ventas":  {"count": v[0] or 0, "bruto": int(v[1] or 0), "neto": int(v[2] or 0)},
+        "compras": {"count": c[0] or 0, "total": int(c[1] or 0)},
+    }
+
+
 def update_sale(engine, sale_id: int, new_estado: str, new_notas: Optional[str]) -> None:
     """Updates estado and notas of a sale. Direct write, no cache."""
     from sqlalchemy import update as sql_update
