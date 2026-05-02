@@ -1,11 +1,12 @@
 from typing import Optional
-from sqlalchemy import String, Integer, Numeric, ForeignKey
+from sqlalchemy import String, Integer, Numeric, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
 
 class RappiDetalle(Base):
     __tablename__ = "rappi_detalles"
+    __table_args__ = (UniqueConstraint("order_id", name="uq_rappi_detalles_order_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     venta_id: Mapped[int] = mapped_column(ForeignKey("ventas.id"), unique=True, nullable=False)
