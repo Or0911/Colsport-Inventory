@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-04-29.
+> Actualizado el 2026-05-01.
 
 ---
 
@@ -27,7 +27,8 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 | IA extracción | OpenAI GPT-4o-mini (JSON mode, temperature=0) |
 | Validación | Pydantic v2 |
 | Deploy | Streamlit Community Cloud |
-| Fuente tipográfica | Google Fonts — Caveat (handwritten) |
+| Fuente tipográfica | Google Fonts — Poppins (sans-serif) |
+| Assets estáticos | `assets/logo.png` (logo Colsports, con fallback a texto si no existe) |
 | Estilos | CSS custom con variables `--cs-*` inyectadas desde dict `THEME` |
 
 ---
@@ -215,7 +216,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ---
 
-## 11. Estado actual (2026-04-28)
+## 11. Estado actual (2026-05-02)
 
 ### ✅ Funcionando en producción (main)
 - Login con contraseña
@@ -230,7 +231,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 - Sistema de estilos con fuente Caveat y tema marrón/canvas configurable por env vars
 
 ### 🔀 Rama `updates` (en testing — no mergear hasta validar)
-Commit `6e5cf8e`. Cinco mejoras implementadas:
+Último commit: `97bc14e`. Diez mejoras implementadas en dos rondas:
 
 1. **Mostrador de venta completa (Dashboard):** sección "🔍 Ver venta completa" debajo de Últimas Ventas. Se ingresa un ID y se despliega el detalle completo: canal, cliente (nombre, CC, teléfono), items con SKU y precios, totales, método de pago + cuenta destino, envío, info Rappi, mensaje original.
 
@@ -250,12 +251,25 @@ Commit `6e5cf8e`. Cinco mejoras implementadas:
 
 5. **Editor de productos de venta:** el auditador permite editar los productos vendidos y sus precios directamente desde la app sin tocar la DB a mano.
 
+**Ronda 2 — Rediseño visual (commit `97bc14e`):**
+
+6. **Fuente: Caveat → Poppins:** toda la app usa ahora `Google Fonts — Poppins` (400/500/600/700). El import CSS fue reemplazado en el bloque `<style>` global.
+
+7. **Logo en sidebar y login:** se carga `assets/logo.png` con `st.image(width=150/220)`. Si el archivo no existe, muestra el texto "COLSPORTS" con estilo inline como fallback. El archivo debe copiarse manualmente a `assets/logo.png` en el repo.
+
+8. **Barra vacía eliminada:** los `st.markdown('<div class="cs-card">...</div>', unsafe_allow_html=True)` alrededor de widgets nativos de Streamlit creaban una barra visual vacía (~32 px) porque el div HTML y los widgets son nodos DOM hermanos, no padre/hijo. Se eliminaron todos los wrappers `cs-card` que rodeaban secciones con widgets nativos. También se ocultó la barra de header nativa de Streamlit con `[data-testid="stHeader"] { display: none !important; }`.
+
+9. **KPIs del período filtrado:** los cuatro indicadores del Dashboard (Ventas, Inversión, Margen, Stock Negativo) ahora se calculan para el rango de fechas seleccionado con el filtro de período, no siempre para el mes en curso. Se creó `get_kpis_period(engine, start, end)` en `db_queries.py` que reemplaza a `get_kpis()` y `get_purchase_kpis()`.
+
+10. **Alertas de stock solo negativo:** el tab "⚠️ Alertas" en Inventario ya no tiene slider "Stock bajo". Solo muestra productos con `stock_actual < 0`. La llamada usa `get_stock_alerts(engine, umbral=-1)`. El KPI "Stock Negativo" en el Dashboard también usa este mismo criterio.
+
 Nuevas funciones en `db_queries.py`:
 - `get_sale_detail(engine, sale_id)` → `dict` con todas las relaciones de una venta.
 - `get_money_by_account(engine, start, end)` → `DataFrame` agrupado por método + cuenta.
 - `get_all_sales(engine, start, end, estado, canal_nombre)` → `DataFrame` filtrable para el auditador.
 - `update_sale(engine, sale_id, new_estado, new_notas)` → escribe directo, sin cache.
 - `update_sale_items(engine, sale_id, items, new_estado, new_notas)` → reemplaza items, recalcula totales, actualiza estado/notas.
+- `get_kpis_period(engine, start, end)` → `dict` con KPIs de ventas y compras para un rango de fechas arbitrario.
 
 Nueva función helper en `streamlit_app.py`:
 - `_render_sale_detail(detalle)` → renderiza el dict de detalle; compartido entre Dashboard y página Ventas.
@@ -349,3 +363,4 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 | `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra; agregar `__pycache__/` al `.gitignore` si no está |
 | `st.stop()` no va dentro de `try/except` | En Streamlit, `StopException` hereda de `BaseException`; un `except Exception` genérico puede capturarlo y silenciarlo. Usar bloque `else` en su lugar. |
 | Limpieza del `data_editor` antes de persistir | El widget puede generar filas vacías si el usuario desplaza horizontalmente y toca campos vacíos. Siempre filtrar `NaN`, strings vacíos y cantidades ≤ 0 antes de llamar a `save_purchase`. |
+| `cs-card` no debe envolver widgets nativos | `st.markdown('<div class="cs-card">', ...)` seguido de widgets nativos de Streamlit genera una barra visual vacía: el div HTML y los widgets son nodos DOM hermanos, no padre/hijo. Usar solo para contenido HTML puro, o eliminar el wrapper y aplicar estilos directamente a los widgets. |
