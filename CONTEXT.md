@@ -231,7 +231,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 - Sistema de estilos con fuente Caveat y tema marrón/canvas configurable por env vars
 
 ### 🔀 Rama `updates` (en testing — no mergear hasta validar)
-Último commit: `97bc14e`. Diez mejoras implementadas en dos rondas:
+Último commit: `05a617c`. Once mejoras implementadas en tres rondas:
 
 1. **Mostrador de venta completa (Dashboard):** sección "🔍 Ver venta completa" debajo de Últimas Ventas. Se ingresa un ID y se despliega el detalle completo: canal, cliente (nombre, CC, teléfono), items con SKU y precios, totales, método de pago + cuenta destino, envío, info Rappi, mensaje original.
 
@@ -263,6 +263,10 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 10. **Alertas de stock solo negativo:** el tab "⚠️ Alertas" en Inventario ya no tiene slider "Stock bajo". Solo muestra productos con `stock_actual < 0`. La llamada usa `get_stock_alerts(engine, umbral=-1)`. El KPI "Stock Negativo" en el Dashboard también usa este mismo criterio.
 
+**Ronda 3 — Visor de compra completa (commit `05a617c`):**
+
+11. **Mostrador de compra completa (Historial de Compras):** debajo de la tabla en el tab "Historial" de la página Compras se agregó un input de ID + botón "Ver detalle". Al consultarlo se despliega: fecha, proveedor, tabla de productos comprados (nombre del catálogo si tiene SKU, SKU, cantidad, costo unitario, subtotal por fila), total calculado y total registrado.
+
 Nuevas funciones en `db_queries.py`:
 - `get_sale_detail(engine, sale_id)` → `dict` con todas las relaciones de una venta.
 - `get_money_by_account(engine, start, end)` → `DataFrame` agrupado por método + cuenta.
@@ -270,9 +274,11 @@ Nuevas funciones en `db_queries.py`:
 - `update_sale(engine, sale_id, new_estado, new_notas)` → escribe directo, sin cache.
 - `update_sale_items(engine, sale_id, items, new_estado, new_notas)` → reemplaza items, recalcula totales, actualiza estado/notas.
 - `get_kpis_period(engine, start, end)` → `dict` con KPIs de ventas y compras para un rango de fechas arbitrario.
+- `get_purchase_detail(engine, purchase_id)` → `dict` con cabecera e ítems de una compra (con nombre de catálogo si tiene SKU).
 
-Nueva función helper en `streamlit_app.py`:
-- `_render_sale_detail(detalle)` → renderiza el dict de detalle; compartido entre Dashboard y página Ventas.
+Nuevas funciones helper en `streamlit_app.py`:
+- `_render_sale_detail(detalle)` → renderiza el dict de detalle de venta; compartido entre Dashboard y página Ventas.
+- `_render_purchase_detail(detalle)` → renderiza el dict de detalle de compra; usado en el historial de Compras.
 
 ### 🔀 Rama `CombosManage` (pendiente de merge)
 - Mejora de `_match_sku`: también busca en campo `alias` (nombres alternativos) por producto.
