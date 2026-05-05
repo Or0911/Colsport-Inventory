@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-02.
+> Actualizado el 2026-05-05.
 
 ---
 
@@ -14,6 +14,7 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 - Registrar compras a proveedores del mismo modo → actualiza el stock.
 - Ver el inventario, alertas de stock bajo/negativo, y stock virtual de combos.
 - Ver un dashboard con KPIs, tendencia de ventas, distribución por canal y top de productos.
+- Editar ventas y compras dentro de una ventana de 24 horas desde el historial.
 
 ---
 
@@ -21,14 +22,14 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 
 | Capa | Tecnología |
 |---|---|
-| UI | Streamlit (Python) |
+| UI | Streamlit (Python ≥ 1.35) |
 | Base de datos | PostgreSQL en Supabase |
 | ORM | SQLAlchemy 2.x (mapped columns, typed) |
 | IA extracción | OpenAI GPT-4o-mini (JSON mode, temperature=0) |
 | Validación | Pydantic v2 |
 | Deploy | Streamlit Community Cloud |
 | Fuente tipográfica | Google Fonts — Poppins (sans-serif) |
-| Assets estáticos | `assets/logo.png` — logo Colsports horizontal (PNG con fondo transparente ideal). Fallback a texto "COLSPORTS" si no existe. Se muestra en login (220px) y sidebar (150px). |
+| Assets estáticos | `assets/logo.png` — logo Colsports horizontal (PNG con fondo transparente). Fallback a texto "COLSPORTS" si no existe. En login se embebe como base64 en HTML (160px centrado). En sidebar se usa `st.image(width=150)`. |
 | Estilos | CSS custom con variables `--cs-*` inyectadas desde dict `THEME` |
 
 ---
@@ -38,8 +39,8 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 ```
 col-inventory-app/
 ├── app/
-│   ├── streamlit_app.py     ← Interfaz principal (login, sidebar, 4 páginas)
-│   ├── db_queries.py        ← Todas las queries de lectura (@st.cache_data)
+│   ├── streamlit_app.py     ← Interfaz principal (login, sidebar, 5 páginas)
+│   ├── db_queries.py        ← Todas las queries de lectura/escritura (@st.cache_data)
 │   └── charts.py            ← Gráficos Plotly (tendencia, canal, top productos)
 │
 ├── api/
@@ -52,7 +53,7 @@ col-inventory-app/
 ├── models/
 │   ├── __init__.py          ← Exporta todos los modelos
 │   ├── base.py              ← DeclarativeBase de SQLAlchemy
-│   ├── producto.py          ← Producto (sku PK, nombre, marca, categoria, stock_actual)
+│   ├── producto.py          ← Producto (sku PK, nombre, marca, categoria, stock_actual, rappi_product_id)
 │   ├── canal.py             ← Canal de venta (WhatsApp, Rappi, etc.)
 │   ├── cliente.py           ← Cliente (nombre, cedula, telefono, email)
 │   ├── venta.py             ← Venta + EstadoVenta enum
@@ -71,6 +72,9 @@ col-inventory-app/
 │   ├── setup_combos.py      ← Inserta filas en combo_componentes (safe to re-run)
 │   ├── mapear_rappi_skus.py ← Rellena rappi_product_id desde ProductosActualizacion-es.xlsx
 │   └── consolidate_and_import.py ← Importación masiva histórica (legacy)
+│
+├── assets/
+│   └── logo.png             ← Logo horizontal Colsports (PNG, fondo transparente)
 │
 ├── .env                     ← DATABASE_URL, OPENAI_API_KEY, APP_PASSWORD (local)
 ├── requirements.txt
@@ -103,7 +107,7 @@ guardar_venta.save_sale()
     ├─ _get_or_create_customer()     → clientes
     ├─ INSERT ventas
     ├─ catalog = SELECT todos los Producto (una sola vez)
-    ├─ _match_sku() por item         F1-score nombre vs catálogo
+    ├─ _match_sku() por item         F1-score nombre vs catálogo (umbral recall 60%)
     ├─ INSERT venta_items
     ├─ INSERT pagos
     ├─ INSERT envios (si aplica)
@@ -143,7 +147,39 @@ guardar_compra.save_purchase()
 
 ---
 
-## 6. Lógica de combos
+## 6. Flujo de edición de compra (ventana 24 h)
+
+```
+Historial de Compras → sección "Registros editables (últimas 24 h)"
+    │
+    ▼ [✏️ Editar] en la fila
+    │
+st.session_state["ep_editing_id"] = compra_id
+st.session_state["ep_detalle_edit"] = get_purchase_detail(engine, compra_id)
+    │
+    ▼
+_render_purchase_edit_form() muestra:
+    ├─ Campo proveedor (text_input)
+    ├─ data_editor con ítems actuales (Producto, SKU selectbox, Cantidad, Costo)
+    └─ Preview total en tiempo real
+    │
+    ▼ [💾 Guardar cambios]
+    │
+update_purchase_items() — una sola transacción:
+    ├─ 1. Revertir stock de ítems anteriores (column expr: stock_actual - cantidad_old)
+    ├─ 2. DELETE detalle_compras WHERE compra_id = X
+    ├─ 3. INSERT nuevos detalle_compras + stock_actual + cantidad_new (column expr)
+    └─ 4. UPDATE compras (proveedor, monto_total recalculado)
+    │
+    ▼
+Invalidar caches + st.rerun()
+```
+
+> **Nota importante**: La edición de ventas NO ajusta el stock. Solo corrige ítems, precios, estado y notas. Si una venta se registró con el SKU incorrecto y ya descontó stock, la corrección de inventario debe hacerse mediante una compra o ajuste directo en DB.
+
+---
+
+## 7. Lógica de combos
 
 - Los combos son productos normales en el catálogo (tienen SKU propio, ej: `1089`).
 - Su `stock_actual` se deja **siempre en 0** — no se llena manualmente.
@@ -155,7 +191,7 @@ guardar_compra.save_purchase()
 
 ---
 
-## 7. SKU matching (F1-score)
+## 8. SKU matching (F1-score)
 
 `_match_sku()` en `guardar_venta.py`:
 
@@ -164,11 +200,16 @@ guardar_compra.save_purchase()
 3. Umbral mínimo de recall: 60%. Devuelve el mejor SKU o `None`.
 4. Stock negativo en productos normales es **intencional**: indica venta sin stock previo.
 
+**Causas conocidas de error en el matching:**
+- **Falsos positivos**: combos con texto ambiguo hacen que el modelo incluya productos no pedidos.
+- **Variantes no diferenciadas**: si el texto ingresado no especifica el sabor/variante (ej: "Creatina Creasmart 550g" sin "Sin sabor"), el modelo elige la variante más similar que no necesariamente es la correcta. La raíz es la falta de aliases diferenciados por variante en el catálogo.
+- **Sin alias**: la rama `CombosManage` agrega el campo `alias` por producto. Hasta que se mergee, el matching solo compara contra `nombre`.
+
 > La rama `CombosManage` tiene una mejora: además del `nombre`, revisa un campo `alias` (comma-separated) por producto para catchear nombres alternativos. Requiere `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;` en la DB antes de activar.
 
 ---
 
-## 8. Base de datos — tablas principales
+## 9. Base de datos — tablas principales
 
 | Tabla | Descripción |
 |---|---|
@@ -187,19 +228,19 @@ guardar_compra.save_purchase()
 
 ---
 
-## 9. Páginas de la app
+## 10. Páginas de la app
 
 | Página | Ruta `current_page` | Descripción |
 |---|---|---|
 | Nueva Venta | `nueva_venta` | Textarea → parsear → previsualizar → confirmar |
-| Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 10 productos, últimas ventas, dinero por cuenta, visor de venta completa |
-| Inventario | `inventario` | Tabs: Catálogo / Alertas stock / Combos / Hot Products |
-| Compras | `compras` | Tabs: Nueva Compra / Historial |
-| Ventas | `ventas` | Tabs: Historial filtrable / Editar venta (estado + notas) |
+| Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 5 productos (cards), últimas ventas, dinero por cuenta, visor de venta completa |
+| Inventario | `inventario` | Tabs: Catálogo / Alertas stock (negativos) / Combos / Hot Products |
+| Compras | `compras` | Tabs: Nueva Compra / Historial (con visor de detalle + edición inline últimas 24h) |
+| Ventas | `ventas` | Historial filtrable + visor de detalle por ID + edición inline (últimas 24h, sin ajuste de stock) |
 
 ---
 
-## 10. Variables de entorno
+## 11. Variables de entorno
 
 ```
 DATABASE_URL=postgresql://...     # Conexión Supabase (pooler en modo transaction)
@@ -212,131 +253,88 @@ THEME_PRIMARY_DARK=#243344
 THEME_PRIMARY_TEXT=#ffffff
 THEME_SECONDARY=#1a1a1a
 THEME_CANVAS=#edeae3
+
+# Para sincronización Rappi (rama rappisync)
+RAPPI_CLIENT_ID=...
+RAPPI_CLIENT_SECRET=...
+RAPPI_STORE_ID=900283093
 ```
 
 En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ---
 
-## 11. Estado actual (2026-05-05)
+## 12. Estado actual (2026-05-05)
 
-### ✅ Funcionando en producción (main)
+### ✅ Rama `main` — en producción
 - Login con contraseña
-- Registro de ventas por todos los canales (WhatsApp, Rappi, Rappi Pro, Local, TikTok Live, Instagram)
-- Cálculo de comisiones Rappi automático
-- Stock se descuenta al guardar venta
-- Compras de proveedor con data_editor editable
-- Stock se suma al guardar compra
-- Dashboard con KPIs del mes/hoy, tendencia, canal, top productos
-- Inventario con alertas de stock negativo y bajo (slider)
-- Combos: stock virtual, alertas de componentes faltantes, marcar como resuelta
-- Sistema de estilos con fuente Caveat y tema marrón/canvas configurable por env vars
+- Registro de ventas (todos los canales), descuento de stock automático
+- Cálculo de comisiones Rappi
+- Compras de proveedor con parser IA + data_editor revisable
+- Stock sumado al confirmar compra
+- Dashboard: KPIs del período, tendencia ventas/compras, donut canal, top 5 productos (barras solucionadas), dinero por cuenta
+- Inventario: alertas stock negativo, combos con stock virtual
+- Sistema de estilos Poppins + tema marrón/canvas configurable
 
-### 🔀 Rama `updates` (en testing — no mergear hasta validar)
-Último commit: `05a617c`. Once mejoras implementadas en tres rondas:
+### 🔀 Rama `purchase-edit-and-fixes` (lista para merge)
+Implementada sobre `rappisync`. Commits principales:
 
-1. **Mostrador de venta completa (Dashboard):** sección "🔍 Ver venta completa" debajo de Últimas Ventas. Se ingresa un ID y se despliega el detalle completo: canal, cliente (nombre, CC, teléfono), items con SKU y precios, totales, método de pago + cuenta destino, envío, info Rappi, mensaje original.
+1. **`eafe4ed`** — Edición de compras con ajuste de stock:
+   - `update_purchase_items()` en `db_queries.py`: revierte stock anterior, aplica nuevo, todo atómico con column expressions.
+   - `get_purchase_detail()`: carga ítems con nombre de catálogo.
+   - `get_all_sales()`: agrega columna `fecha_dt` (timestamp crudo) para filtro de ventana.
+   - `get_recent_purchases()`: agrega columna `fecha_dt`.
+   - `update_sale_items()`: reemplaza ítems de venta, recalcula totales, actualiza estado/notas. **No ajusta stock** (por diseño).
+   - Fix en `get_top_products`: GROUP BY solo (sku, nombre) → barras del chart ya no fragmentadas.
+   - Fix CSS sidebar: header transparente, botón expand con color primario.
 
-2. **Manejo de None en compras:** antes de persistir, el DataFrame del `data_editor` se limpia:
-   - Columna SKU: `None`/`NaN` → `""` (sin SKU asignado), no bloquea el guardado.
-   - Se descartan filas sin `producto_nombre_raw` o con nombre vacío.
-   - Se descartan filas con `cantidad` nula, no numérica o ≤ 0.
-   - Si no queda ninguna fila válida, muestra aviso en lugar de intentar guardar.
+2. **`d828108`** — Ventana de edición de 24 horas:
+   - Constante `EDIT_WINDOW_HOURS = 24`.
+   - Helper `_is_editable(fecha)`.
+   - `fecha_dt` añadido a ambas queries para comparación en pandas.
 
-3. **Página Ventas (auditador/corrector):** nueva ruta `ventas` en el sidebar.
-   - Tab "Historial": lista filtrable por rango de fechas, estado y canal; visor de detalle inline por ID.
-   - Tab "Editar venta": busca por ID → venta actual colapsada como referencia → `data_editor` con productos (nombre libre, SKU selectbox, cantidad, precio unit.) → preview de total en tiempo real → estado y notas → guardar.
-   - Al guardar: reemplaza `venta_items`, recalcula `subtotal` y `total` (conserva `costo_envio` + `descuento` originales), actualiza `estado` y `notas` en una sola transacción.
-   - El stock **no se ajusta automáticamente** al editar items; el aviso aparece en la UI.
+3. **`dd79e6e`** — Edición inline en el historial:
+   - Eliminados tabs separados "Editar venta" y "Editar compra".
+   - Sección "Registros editables (últimas 24h)" al final del historial de cada página.
+   - Botón "✏️ Editar" por registro (toggle — un solo formulario abierto a la vez).
+   - Helpers `_render_purchase_edit_form()` y `_render_sale_edit_form()`.
+   - Widget keys incluyen el ID del registro para evitar conflictos entre formularios.
 
-4. **Dinero por cuenta en Dashboard:** expander colapsable "💳 Dinero por cuenta / método de pago" que muestra, para el período seleccionado, el total acumulado por método + cuenta destino (Nequi, Bancolombia Colsports, etc.) con número de ventas.
+4. **Commits adicionales** — Correcciones CSS sidebar y logo login:
+   - `pointer-events: none` en el header para no bloquear clicks en el contenido principal; `pointer-events: all` solo en el botón de toggle.
+   - Texto de keyboard shortcut de Streamlit 1.35+ oculto con `[data-testid="stSidebarCollapseButton"] p, span { display: none }`.
+   - Logo en la tarjeta de login embebido como base64 en el bloque HTML — elimina el cuadro vacío que aparecía sobre "Bienvenido".
 
-5. **Editor de productos de venta:** el auditador permite editar los productos vendidos y sus precios directamente desde la app sin tocar la DB a mano.
+### 🔀 Rama `rappisync` (base de `purchase-edit-and-fixes`)
+Sincronización automática de disponibilidad con Rappi. Ver sección 13.
 
-**Ronda 2 — Rediseño visual (commit `97bc14e`):**
+### 🔀 Rama `CombosManage` (pendiente de merge)
+- Mejora de `_match_sku`: también busca en campo `alias` por producto.
+- Requiere migración: `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;`
 
-6. **Fuente: Caveat → Poppins:** toda la app usa ahora `Google Fonts — Poppins` (400/500/600/700). El import CSS fue reemplazado en el bloque `<style>` global.
+### 🔀 Rama `updates` (pendiente de merge)
+Mejoras de UI y visor de venta completa. Validar antes de mergear.
 
-7. **Logo en sidebar y login:** se carga `assets/logo.png` con `st.image(width=150/220)`. Si el archivo no existe, muestra el texto "COLSPORTS" con estilo inline como fallback. El archivo debe copiarse manualmente a `assets/logo.png` en el repo.
+---
 
-8. **Barra vacía eliminada:** los `st.markdown('<div class="cs-card">...</div>', unsafe_allow_html=True)` alrededor de widgets nativos de Streamlit creaban una barra visual vacía (~32 px) porque el div HTML y los widgets son nodos DOM hermanos, no padre/hijo. Se eliminaron todos los wrappers `cs-card` que rodeaban secciones con widgets nativos. También se ocultó la barra de header nativa de Streamlit con `[data-testid="stHeader"] { display: none !important; }`.
+## 13. Funcionalidades de Rappi Sync (`rappisync`)
 
-9. **KPIs del período filtrado:** los cuatro indicadores del Dashboard (Ventas, Inversión, Margen, Stock Negativo) ahora se calculan para el rango de fechas seleccionado con el filtro de período, no siempre para el mes en curso. Se creó `get_kpis_period(engine, start, end)` en `db_queries.py` que reemplaza a `get_kpis()` y `get_purchase_kpis()`.
+1. **`models/producto.py`:** columna `rappi_product_id` (String, nullable).
+2. **`models/rappi_detalle.py`:** `UniqueConstraint` sobre `order_id` — previene doble descuento.
+3. **`api/rappi_client.py`:**
+   - `sync_after_sale(sku, rappi_product_id, new_stock)` → apaga si stock ≤ 0.
+   - `sync_after_purchase(sku, rappi_product_id, new_stock)` → enciende si stock > 0.
+4. **`DuplicateRappiOrderError`:** se lanza si el `order_id` ya existe; la UI muestra aviso.
 
-10. **Alertas de stock solo negativo:** el tab "⚠️ Alertas" en Inventario ya no tiene slider "Stock bajo". Solo muestra productos con `stock_actual < 0`. La llamada usa `get_stock_alerts(engine, umbral=-1)`. El KPI "Stock Negativo" en el Dashboard también usa este mismo criterio.
-
-**Ronda 3 — Visor de compra completa (commit `05a617c`):**
-
-11. **Mostrador de compra completa (Historial de Compras):** debajo de la tabla en el tab "Historial" de la página Compras se agregó un input de ID + botón "Ver detalle". Al consultarlo se despliega: fecha, proveedor, tabla de productos comprados (nombre del catálogo si tiene SKU, SKU, cantidad, costo unitario, subtotal por fila), total calculado y total registrado.
-
-Nuevas funciones en `db_queries.py`:
-- `get_sale_detail(engine, sale_id)` → `dict` con todas las relaciones de una venta.
-- `get_money_by_account(engine, start, end)` → `DataFrame` agrupado por método + cuenta.
-- `get_all_sales(engine, start, end, estado, canal_nombre)` → `DataFrame` filtrable para el auditador.
-- `update_sale(engine, sale_id, new_estado, new_notas)` → escribe directo, sin cache.
-- `update_sale_items(engine, sale_id, items, new_estado, new_notas)` → reemplaza items, recalcula totales, actualiza estado/notas.
-- `get_kpis_period(engine, start, end)` → `dict` con KPIs de ventas y compras para un rango de fechas arbitrario.
-- `get_purchase_detail(engine, purchase_id)` → `dict` con cabecera e ítems de una compra (con nombre de catálogo si tiene SKU).
-
-Nuevas funciones helper en `streamlit_app.py`:
-- `_render_sale_detail(detalle)` → renderiza el dict de detalle de venta; compartido entre Dashboard y página Ventas.
-- `_render_purchase_detail(detalle)` → renderiza el dict de detalle de compra; usado en el historial de Compras.
-
-### 🔀 Rama `rappisync` (lista para merge)
-
-Funcionalidad de sincronización automática de disponibilidad con Rappi:
-
-1. **`models/producto.py`:** nueva columna `rappi_product_id` (String, nullable). Almacena el ID del producto en el catálogo de Rappi (ej: `2126240804`). Null si el producto no está publicado en Rappi.
-
-2. **`models/rappi_detalle.py`:** `UniqueConstraint` sobre `order_id` (`uq_rappi_detalles_order_id`). Previene el doble descuento de stock cuando se registra manualmente una orden que Rappi ya notificó.
-
-3. **`scripts/mapear_rappi_skus.py`:** lee `ProductosActualizacion-es.xlsx` (columna SKU formato `Colsports_XXXX` → extrae el SKU local; columna `ID del producto` → `rappi_product_id`) y rellena la tabla `productos`. Correr una vez tras la migración de DB.
-
-4. **`api/rappi_client.py`:** cliente HTTP para sincronizar con la API de Rappi. Funciones:
-   - `sync_after_sale(sku, rappi_product_id, new_stock)` → si `new_stock ≤ 0`, apaga el producto en Rappi.
-   - `sync_after_purchase(sku, rappi_product_id, new_stock)` → si `new_stock > 0`, enciende el producto en Rappi.
-   - No-op silencioso si `RAPPI_CLIENT_ID` no está configurado.
-
-5. **`api/guardar_venta.py`:**
-   - `DuplicateRappiOrderError`: excepción lanzada si el `order_id` ya existe en `rappi_detalles`.
-   - La UI debe capturarla y mostrar aviso al usuario.
-   - `_deduct_stock()` ahora retorna `list[(sku, new_stock, rappi_product_id)]`.
-   - `save_sale()` llama a `sync_after_sale()` para cada producto afectado.
-
-6. **`api/guardar_compra.py`:** llama a `sync_after_purchase()` para cada SKU válido tras sumar stock.
-
-**Variables de entorno requeridas para el sync:**
-```
-RAPPI_CLIENT_ID       = ...   # Del partner portal de Rappi
-RAPPI_CLIENT_SECRET   = ...   # Del partner portal de Rappi
-RAPPI_STORE_ID        = 900283093   # ID de tienda COLSPORTS en Rappi
-# Opcionales (tienen defaults):
-RAPPI_AUTH_URL        = https://auth.rappi.com/api/auth/token
-RAPPI_API_BASE_URL    = https://microservices.dev.rappi.com
-```
-
-**Migración de DB necesaria antes de activar:**
+**Migración de DB necesaria:**
 ```sql
 ALTER TABLE productos ADD COLUMN IF NOT EXISTS rappi_product_id VARCHAR(30);
 ALTER TABLE rappi_detalles ADD CONSTRAINT uq_rappi_detalles_order_id UNIQUE (order_id);
 ```
 
-**Flujo operativo:**
-- Venta Local/WhatsApp → stock baja → si llega a 0 → sistema apaga el producto en Rappi automáticamente.
-- Venta en Rappi → se registra en la app → sistema valida que no sea duplicado → descuenta stock local.
-- Ingreso de mercancía → stock sube de 0 → sistema enciende el producto en Rappi.
-
-### 🔀 Rama `CombosManage` (pendiente de merge)
-- Mejora de `_match_sku`: también busca en campo `alias` (nombres alternativos) por producto.
-- Requiere migración en DB: `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;`
-- Una vez corrida la migración, hacer merge a main.
-
-### 🌿 Otras ramas (históricas, no mergear)
-- `Version1`, `MVP-visualization-refinement`, `Promt_Refinement`, `update_inventory`, `app` — estados anteriores del proyecto.
-
 ---
 
-## 12. Deploy
+## 14. Deploy
 
 - **URL producción:** Streamlit Community Cloud (cuenta Or0911)
 - **Repo GitHub:** `Or0911/Colsport-Inventory` rama `main`
@@ -346,7 +344,7 @@ ALTER TABLE rappi_detalles ADD CONSTRAINT uq_rappi_detalles_order_id UNIQUE (ord
 
 ---
 
-## 13. Operaciones de mantenimiento
+## 15. Operaciones de mantenimiento
 
 ### Agregar un producto al catálogo
 ```sql
@@ -354,14 +352,18 @@ INSERT INTO productos (sku, nombre, peso, marca, categoria, stock_actual)
 VALUES ('1999', 'Nombre del Producto', '1kg', 'Marca', 'Categoria', 0);
 ```
 
-### Agregar un combo
-1. Agregar el combo como producto normal con `stock_actual = 0`.
-2. Agregar sus componentes en `combo_componentes`:
+### Agregar alias para mejorar el matching (tras merge de CombosManage)
 ```sql
-INSERT INTO combo_componentes (combo_sku, componente_sku, cantidad)
-VALUES ('SKU_COMBO', 'SKU_COMPONENTE', cantidad_por_unidad);
+UPDATE productos SET alias = 'Alias1, Alias2, Alias3' WHERE sku = 'XXXX';
 ```
-O editar `scripts/setup_combos.py` y volver a correrlo (es idempotente).
+
+### Corrección manual de stock por error de SKU en compra
+Usar la **edición inline de compras** (historial → ✏️ Editar). Solo disponible dentro de las 24h posteriores al registro. Después de ese plazo, usar SQL directo:
+```sql
+UPDATE productos SET stock_actual = stock_actual - 6 WHERE sku = '2030'; -- revertir
+UPDATE productos SET stock_actual = stock_actual + 6 WHERE sku = '2045'; -- aplicar correcto
+UPDATE detalle_compras SET producto_sku = '2045' WHERE compra_id = X AND producto_sku = '2030';
+```
 
 ### Borrar la última compra (duplicado)
 ```sql
@@ -383,36 +385,41 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 
 ---
 
-## 14. Roadmap (próximas funcionalidades)
+## 16. Roadmap (próximos pasos)
 
 ### Prioridad alta
-- **Merge `updates` → main** una vez validado en testing.
-- **Merge CombosManage → main** + migración `alias` en DB.
-- **Resumen de ventas del día:** vista rápida para cierre diario.
+- **Merge `purchase-edit-and-fixes` → `rappisync` → `main`**: rama lista.
+- **Merge `CombosManage` → main** + migración `alias` en DB: habilita distinción de variantes.
+- **Enriquecer aliases del catálogo**: agregar sabor/variante a los aliases de productos con múltiples variantes (ej: SKU 2030 vs 2045 para Creatina Creasmart sin sabor vs vainilla). Previene el error de matching más frecuente.
 
 ### Prioridad media
-- **Sincronización Rappi:** ✅ disponibilidad automática implementada en rama `rappisync`. Pendiente: webhook o polling para importar órdenes automáticamente sin copiar/pegar.
-- **WhatsApp Business API:** recibir mensajes directamente vía webhook, parsear y registrar sin abrir la app.
-- **Exportación a Excel/CSV:** desde el historial de ventas y compras.
+- **Ajuste manual de stock desde la app**: página o modal para `stock_actual += X` sin necesidad de crear una compra completa. Útil para correcciones de inventario físico.
+- **Pipeline de evaluación del modelo de matching**: loguear en una tabla `sku_match_log(fecha, texto_ingresado, sku_propuesto, sku_confirmado)`. Con 30-50 correcciones se puede calcular precisión/recall por categoría de producto.
+- **Rappi webhook/polling**: importar órdenes automáticamente sin copiar/pegar.
+- **Exportación Excel/CSV** desde historial de ventas y compras.
 
-### Prioridad baja / ideas
-- **Multi-usuario:** roles (admin, vendedor) con sesiones separadas.
-- **Fotos de productos:** campo `imagen_url` en catálogo, mostrar en inventario.
-- **Integración contable:** exportar resumen mensual a formato compatible con Siigo u otro.
+### Prioridad baja
+- **Multi-usuario**: roles admin/vendedor con sesiones separadas.
+- **Resumen de cierre diario**: vista rápida para fin del día.
+- **Fotos de productos**: campo `imagen_url` en catálogo.
 
 ---
 
-## 15. Decisiones de diseño importantes
+## 17. Decisiones de diseño importantes
 
 | Decisión | Razón |
 |---|---|
 | IA solo extrae, no calcula | Evitar errores aritméticos del modelo; Python hace todos los cálculos |
 | Stock negativo permitido | Refleja la realidad: se vende y luego se consigue; las alertas hacen el seguimiento |
 | Combo `stock_actual = 0` siempre | El stock virtual se calcula en tiempo real desde los componentes |
-| Una sola transacción por venta/compra | Si algo falla, nada queda a medias en la DB |
+| Una sola transacción por venta/compra/edición | Si algo falla, nada queda a medias en la DB |
+| Edición de compras ajusta stock; edición de ventas NO | Compra = entrada física (reversible y mensurable); venta = ya salió del local (ajuste ambiguo) |
+| Column expressions en UPDATE de stock | `values(stock_actual=Producto.stock_actual ± cantidad)` evita el riesgo de ORM staleness cuando el mismo SKU aparece en múltiples filas de una edición |
+| Ventana de 24h para edición | Limita el impacto de correcciones retroactivas; errores evidentes se corrigen el mismo día |
+| Widget keys incluyen ID del registro | Evita conflictos en session_state cuando múltiples formularios de edición comparten la página |
+| Logo en login como base64 en HTML | `st.image()` dentro de una columna no permite anidarse dentro de un div HTML; la alternativa es embeber la imagen en el propio bloque HTML |
+| CSS sidebar con pointer-events | `pointer-events: none` en el header contenedor evita que bloquee clicks del contenido principal; se reactiva con `pointer-events: all` solo en el botón de toggle |
 | Nombres de campos Pydantic en español | Los JSON keys deben coincidir con lo que el LLM retorna; cambiarlos rompería el prompt |
-| Aliases backward-compatible en todos los módulos | Permite renombrar funciones sin romper código existente o tests |
-| `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra; agregar `__pycache__/` al `.gitignore` si no está |
-| `st.stop()` no va dentro de `try/except` | En Streamlit, `StopException` hereda de `BaseException`; un `except Exception` genérico puede capturarlo y silenciarlo. Usar bloque `else` en su lugar. |
-| Limpieza del `data_editor` antes de persistir | El widget puede generar filas vacías si el usuario desplaza horizontalmente y toca campos vacíos. Siempre filtrar `NaN`, strings vacíos y cantidades ≤ 0 antes de llamar a `save_purchase`. |
-| `cs-card` no debe envolver widgets nativos | `st.markdown('<div class="cs-card">', ...)` seguido de widgets nativos de Streamlit genera una barra visual vacía: el div HTML y los widgets son nodos DOM hermanos, no padre/hijo. Usar solo para contenido HTML puro, o eliminar el wrapper y aplicar estilos directamente a los widgets. |
+| `st.stop()` no va dentro de `try/except` | En Streamlit, `StopException` hereda de `BaseException`; un `except Exception` genérico puede capturarlo y silenciarlo |
+| `cs-card` no debe envolver widgets nativos | `st.markdown('<div class="cs-card">', ...)` seguido de widgets nativos de Streamlit genera una barra visual vacía: el div HTML y los widgets son nodos DOM hermanos, no padre/hijo |
+| `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra; `__pycache__/` debe estar en `.gitignore` |
