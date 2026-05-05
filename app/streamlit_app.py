@@ -304,6 +304,7 @@ from app.db_queries import (
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
     get_sale_detail, get_money_by_account, get_all_sales, update_sale, update_sale_items,
     get_kpis_period, get_purchase_detail, update_purchase_items,
+    get_catalog_with_aliases, update_product_alias,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
@@ -501,13 +502,14 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
 
-        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒", "ventas": "📋"}
+        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒", "ventas": "📋", "catalogo": "🏷️"}
         labels = {
             "nueva_venta": "Nueva Venta",
             "dashboard": "Dashboard",
             "inventario": "Inventario",
             "compras": "Compras",
             "ventas": "Ventas",
+            "catalogo": "Catálogo / Aliases",
         }
         for page, label in labels.items():
             if st.button(f"{icons[page]}  {label}", key=f"nav_{page}",
@@ -2018,6 +2020,77 @@ def page_sales(engine):
 
 
 # ---------------------------------------------------------------------------
+# PÁGINA: CATÁLOGO Y GESTIÓN DE ALIASES
+# ---------------------------------------------------------------------------
+
+def page_catalog(engine):
+    st.markdown('<div class="cs-section-title">🏷️ Catálogo y Aliases de Productos</div>',
+                unsafe_allow_html=True)
+
+    st.markdown(
+        "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;margin-bottom:16px'>"
+        "Los <b>aliases</b> son nombres alternativos separados por coma que el matcher de IA "
+        "usa como fallback cuando el nombre oficial no coincide. "
+        "Útil para distinguir variantes (sabor, tamaño) que comparten el mismo nombre base."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Search filter ──
+    q = st.text_input("Buscar producto", placeholder="Nombre o SKU…", key="cat_search",
+                      label_visibility="collapsed")
+
+    productos = get_catalog_with_aliases(engine)
+    if q:
+        q_lower = q.lower()
+        productos = [p for p in productos if q_lower in p["nombre"].lower() or q_lower in p["sku"].lower()]
+
+    if not productos:
+        st.info("No se encontraron productos con ese criterio.")
+        return
+
+    st.markdown(
+        f'<div style="font-size:12px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:8px">'
+        f'{len(productos)} producto(s)</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── One row per product ──
+    for prod in productos:
+        sku = prod["sku"]
+        cols = st.columns([0.7, 2.5, 3, 0.8])
+
+        with cols[0]:
+            st.markdown(
+                f"<div style='font-size:12px;color:#aaa;font-family:Poppins,sans-serif;"
+                f"padding-top:8px'>{sku}</div>",
+                unsafe_allow_html=True,
+            )
+        with cols[1]:
+            st.markdown(
+                f"<div style='font-size:13px;font-family:Poppins,sans-serif;padding-top:8px'>"
+                f"{prod['nombre']}</div>",
+                unsafe_allow_html=True,
+            )
+        with cols[2]:
+            new_alias = st.text_input(
+                "alias",
+                value=prod["alias"],
+                key=f"alias_{sku}",
+                placeholder="Alias1, Alias2, …",
+                label_visibility="collapsed",
+            )
+        with cols[3]:
+            if st.button("Guardar", key=f"alias_save_{sku}", use_container_width=True):
+                if new_alias.strip() != prod["alias"].strip():
+                    update_product_alias(engine, sku, new_alias)
+                    st.success(f"SKU {sku} actualizado.")
+                    st.rerun()
+                else:
+                    st.info("Sin cambios.")
+
+
+# ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
 
@@ -2042,6 +2115,8 @@ def main():
         page_purchases(engine)
     elif page == "ventas":
         page_sales(engine)
+    elif page == "catalogo":
+        page_catalog(engine)
 
 
 if __name__ == "__main__":

@@ -75,13 +75,27 @@ def _tokenize(text: str) -> set[str]:
     return set(tokens)
 
 
+def _f1_score(keywords: list, catalog_tokens: set) -> float:
+    """F1 between query keywords and catalog tokens; returns 0 if recall < 60%."""
+    if not keywords or not catalog_tokens:
+        return 0.0
+    matches = sum(1 for kw in keywords if kw in catalog_tokens)
+    recall = matches / len(keywords)
+    if recall < 0.6:
+        return 0.0
+    precision = matches / len(catalog_tokens)
+    return 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+
 def _match_sku(catalog: list, raw_name: str) -> Optional[str]:
     """
     Finds the SKU of a product in the in-memory catalog.
 
-    The catalog is passed as a list to avoid one DB query per item.
-    Strategy: keyword overlap with a 60% recall threshold.
-    Tokens are split at digit-letter boundaries so '5kg' matches '5'.
+    Strategy:
+    1. Score against product.nombre with F1 (60% recall threshold).
+    2. If no match on nombre, score each comma-separated entry in product.alias.
+       Aliases allow distinguishing variants: e.g. "Creatina Creasmart 550g Sin sabor"
+       maps SKU 2045 even when the catalog name is "Creatina Creasmart 550g - Sin sabor".
 
     Args:
         catalog:  List of Producto objects already fetched from the DB.
@@ -103,17 +117,16 @@ def _match_sku(catalog: list, raw_name: str) -> Optional[str]:
     best_score = 0.0
 
     for product in catalog:
-        catalog_tokens = _tokenize(product.nombre)
-        matches = sum(1 for kw in keywords if kw in catalog_tokens)
-        recall = matches / len(keywords)
+        score = _f1_score(keywords, _tokenize(product.nombre))
 
-        if recall < 0.6:
-            continue
-
-        # F1 balances recall and precision: penalizes products with many extra tokens
-        # (prevents a kit containing the product from outscoring the individual item)
-        precision = matches / len(catalog_tokens) if catalog_tokens else 0
-        score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        # Fallback: check each alias entry if nombre didn't match
+        if score == 0.0 and product.alias:
+            for alias_entry in product.alias.split(","):
+                alias_entry = alias_entry.strip()
+                if alias_entry:
+                    alias_score = _f1_score(keywords, _tokenize(alias_entry))
+                    if alias_score > score:
+                        score = alias_score
 
         if score > best_score:
             best_score = score

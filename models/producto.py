@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import String, Integer
+from sqlalchemy import String, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
@@ -16,5 +16,8 @@ class Producto(Base):
     # Rappi product ID (ID del producto en el catálogo de Rappi).
     # Null si el producto no está publicado en Rappi.
     rappi_product_id: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # Nombres alternativos separados por coma para mejorar el SKU matching.
+    # Ejemplo: "Creatina Creasmart 550g Sin sabor, Creasmart sin sabor 550"
+    alias: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     items_venta: Mapped[list["VentaItem"]] = relationship(back_populates="producto", foreign_keys="VentaItem.sku")
