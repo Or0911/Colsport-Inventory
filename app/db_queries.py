@@ -436,7 +436,8 @@ def get_recent_purchases(_engine, limit: int = 20) -> pd.DataFrame:
         ).all()
     df = pd.DataFrame(rows, columns=["ID", "Fecha", "Proveedor", "Monto total", "Items"])
     if not df.empty:
-        df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.strftime("%d/%m/%Y %H:%M")
+        df["fecha_dt"] = pd.to_datetime(df["Fecha"])   # raw timestamp for 24h edit window check
+        df["Fecha"] = df["fecha_dt"].dt.strftime("%d/%m/%Y %H:%M")
         df["Monto total"] = df["Monto total"].apply(
             lambda x: f"${int(x):,}".replace(",", ".") if pd.notna(x) and x else "—"
         )
@@ -596,7 +597,8 @@ def get_all_sales(
 
     df = pd.DataFrame(rows, columns=["ID", "Fecha", "Canal", "Cliente", "Bruto", "Total", "Estado", "Pago", "Cuenta", "Notas"])
     if not df.empty:
-        df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.strftime("%d/%m/%Y %H:%M")
+        df["fecha_dt"] = pd.to_datetime(df["Fecha"])   # raw timestamp for 24h edit window check
+        df["Fecha"] = df["fecha_dt"].dt.strftime("%d/%m/%Y %H:%M")
         df["Total_num"] = df["Total"]
         df["Total"] = df["Total"].apply(lambda x: f"${int(x):,}".replace(",", "."))
         df["Bruto"] = df["Bruto"].apply(lambda x: f"${int(x):,}".replace(",", "."))
