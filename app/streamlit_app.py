@@ -117,18 +117,35 @@ html, body, [class*="css"], .stApp {
     color: var(--cs-primary-text) !important;
 }
 
-/* Sidebar collapse/expand button */
-[data-testid="stSidebarCollapseButton"] button {
+/* Collapse button INSIDE the sidebar — white icon over dark bg */
+[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
     background: transparent !important;
     border: none !important;
-    color: var(--cs-primary-text) !important;
 }
-[data-testid="stSidebarCollapseButton"] button:hover {
+[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button:hover {
     background: var(--cs-primary-dark) !important;
 }
-[data-testid="stSidebarCollapseButton"] svg {
+[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
     stroke: var(--cs-primary-text) !important;
     fill: var(--cs-primary-text) !important;
+    color: var(--cs-primary-text) !important;
+}
+
+/* Expand button that appears in the header when sidebar is COLLAPSED */
+/* The header is made transparent; only this button remains visible */
+[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button {
+    background: var(--cs-primary) !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 6px !important;
+}
+[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button:hover {
+    background: var(--cs-primary-dark) !important;
+}
+[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] svg {
+    stroke: var(--cs-primary-text) !important;
+    fill: var(--cs-primary-text) !important;
+    color: var(--cs-primary-text) !important;
 }
 
 /* Primary button */
@@ -245,10 +262,17 @@ html, body, [class*="css"], .stApp {
 /* Dataframe */
 .stDataFrame { background: #fffef9 !important; }
 
-/* Hide streamlit chrome */
-[data-testid="stHeader"] { display: none !important; }
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
+/* Hide streamlit chrome — keep header in DOM so the sidebar expand button works */
+[data-testid="stHeader"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+/* Hide the right-side toolbar (deploy button, running indicator) */
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+#MainMenu { display: none !important; }
+footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -265,7 +289,7 @@ from app.db_queries import (
     get_recent_purchases, get_sku_catalog,
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
     get_sale_detail, get_money_by_account, get_all_sales, update_sale, update_sale_items,
-    get_kpis_period, get_purchase_detail,
+    get_kpis_period, get_purchase_detail, update_purchase_items,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
@@ -1231,7 +1255,7 @@ def page_purchases(engine):
         st.session_state["purchase_msg_v"] = 0
     purchase_key = f"purchase_msg_{st.session_state['purchase_msg_v']}"
 
-    tab_nueva, tab_historial = st.tabs(["📥 Nueva Compra", "📋 Historial"])
+    tab_nueva, tab_historial, tab_editor_compra = st.tabs(["📥 Nueva Compra", "📋 Historial", "✏️ Editar Compra"])
 
     # ── Tab 1: Nueva compra ──
     with tab_nueva:
@@ -1507,6 +1531,177 @@ def page_purchases(engine):
                     _render_purchase_detail(detalle_c)
                     st.markdown('</div>', unsafe_allow_html=True)
 
+    # ── Tab 3: Editar compra ──
+    with tab_editor_compra:
+        st.markdown(
+            '<div style="font-size:14px;color:#777;font-family:Poppins,sans-serif;margin-bottom:12px">'
+            'Busca una compra por ID para corregir productos, cantidades, costos o proveedor. '
+            '<b>El stock se ajusta automáticamente</b> al guardar: se revierte el stock anterior '
+            'y se aplica el nuevo.</div>',
+            unsafe_allow_html=True,
+        )
+
+        epc1, _ = st.columns([1, 2])
+        with epc1:
+            edit_compra_id = st.number_input(
+                "ID de la compra a editar", min_value=1, step=1,
+                key="ep_edit_id", label_visibility="visible",
+            )
+            buscar_compra_btn = st.button("🔍 Buscar", key="ep_buscar_btn", use_container_width=True)
+
+        if buscar_compra_btn:
+            st.session_state["ep_detalle_edit"] = get_purchase_detail(engine, int(edit_compra_id))
+
+        detalle_compra_edit = st.session_state.get("ep_detalle_edit")
+
+        if detalle_compra_edit is None and buscar_compra_btn:
+            st.warning(f"No existe ninguna compra con ID #{int(edit_compra_id)}")
+        elif detalle_compra_edit:
+            st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+
+            with st.expander("📄 Compra actual (referencia)", expanded=False):
+                _render_purchase_detail(detalle_compra_edit)
+
+            st.markdown(
+                "<div style='font-size:16px;font-weight:700;color:#1a1a1a;"
+                "font-family:Poppins,sans-serif;margin:12px 0 8px'>✏️ Editar</div>",
+                unsafe_allow_html=True,
+            )
+
+            ep_proveedor = st.text_input(
+                "Proveedor",
+                value=detalle_compra_edit.get("proveedor") or "",
+                key="ep_proveedor",
+                placeholder="Nombre del proveedor",
+            )
+
+            st.markdown(
+                "<div style='font-size:14px;font-weight:600;color:#555;"
+                "font-family:Poppins,sans-serif;margin-bottom:4px'>📦 Productos comprados</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="font-size:12px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:6px">'
+                'Edita nombre, SKU, cantidad y costo. El stock <b>se ajusta automáticamente</b>: '
+                'se revierte el stock del registro anterior y se aplica el nuevo.</div>',
+                unsafe_allow_html=True,
+            )
+
+            catalogo_ep = get_sku_catalog(engine)
+            skus_ep = [""] + [f"{p['sku']} — {p['nombre']}" for p in catalogo_ep]
+            sku_map_ep = {"": None}
+            for p in catalogo_ep:
+                sku_map_ep[f"{p['sku']} — {p['nombre']}"] = p["sku"]
+            sku_display_ep = {p["sku"]: f"{p['sku']} — {p['nombre']}" for p in catalogo_ep}
+
+            import pandas as _pd_ep
+            rows_ep = []
+            for it in detalle_compra_edit["items"]:
+                sku_disp = sku_display_ep.get(it["sku"], "") if it["sku"] else ""
+                nombre_display = it["nombre_catalogo"] or it["nombre_raw"]
+                rows_ep.append({
+                    "Producto": nombre_display,
+                    "SKU": sku_disp,
+                    "Cantidad": it["cantidad"],
+                    "Costo unitario (COP)": it["precio_costo_unitario"],
+                })
+            df_ep_edit = _pd_ep.DataFrame(rows_ep) if rows_ep else _pd_ep.DataFrame(
+                columns=["Producto", "SKU", "Cantidad", "Costo unitario (COP)"]
+            )
+
+            df_ep_result = st.data_editor(
+                df_ep_edit,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="ep_items_editor",
+                column_config={
+                    "Producto": st.column_config.TextColumn("Producto", width="large"),
+                    "SKU": st.column_config.SelectboxColumn(
+                        "SKU en catálogo", options=skus_ep, width="large"
+                    ),
+                    "Cantidad": st.column_config.NumberColumn(
+                        "Cantidad", min_value=1, step=1, width="small"
+                    ),
+                    "Costo unitario (COP)": st.column_config.NumberColumn(
+                        "Costo unitario (COP)", min_value=0, step=1000,
+                        format="$ %d", width="medium"
+                    ),
+                },
+            )
+
+            # Total preview
+            try:
+                ep_total_est = int(
+                    (df_ep_result["Cantidad"].fillna(1) *
+                     df_ep_result["Costo unitario (COP)"].fillna(0)).sum()
+                )
+                st.markdown(
+                    f"<div style='text-align:right;font-size:15px;color:#555;"
+                    f"font-family:Poppins,sans-serif;margin:6px 0 12px'>"
+                    f"<b>Total estimado:</b> "
+                    f"<span style='color:#1a1a1a;font-weight:700;font-size:18px'>"
+                    f"{fmt_cop(ep_total_est)}</span></div>",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
+
+            st.markdown(
+                "<hr style='border:none;border-top:1px solid #e0ddd8;margin:4px 0 12px'>",
+                unsafe_allow_html=True,
+            )
+
+            if st.button("💾 Guardar cambios", type="primary", key="ep_guardar_edit",
+                         use_container_width=True):
+                try:
+                    items_ep_save = []
+                    for _, row in df_ep_result.iterrows():
+                        nombre = str(row.get("Producto") or "").strip()
+                        if not nombre:
+                            continue
+                        qty = row.get("Cantidad")
+                        costo = row.get("Costo unitario (COP)")
+                        try:
+                            qty = int(qty) if qty is not None and not _pd_ep.isna(qty) else 1
+                            costo = int(costo) if costo is not None and not _pd_ep.isna(costo) else None
+                        except (ValueError, TypeError):
+                            qty, costo = 1, None
+                        if qty <= 0:
+                            continue
+                        sku_raw = str(row.get("SKU") or "").strip()
+                        sku_val = sku_map_ep.get(sku_raw, None)
+                        items_ep_save.append({
+                            "nombre_raw": nombre,
+                            "sku": sku_val,
+                            "cantidad": qty,
+                            "precio_costo_unitario": costo,
+                        })
+
+                    if not items_ep_save:
+                        st.warning("Debe haber al menos un producto con nombre válido.")
+                    else:
+                        update_purchase_items(
+                            engine, detalle_compra_edit["id"],
+                            items_ep_save, ep_proveedor or None,
+                        )
+                        get_purchase_detail.clear()
+                        get_compras_recientes.clear()
+                        get_inventario.clear()
+                        get_alertas_stock.clear()
+                        get_kpis.clear()
+                        get_kpis_period.clear()
+                        st.session_state.pop("ep_detalle_edit", None)
+                        st.success(
+                            f"✅ Compra #{detalle_compra_edit['id']} actualizada — "
+                            f"{len(items_ep_save)} producto(s). Stock ajustado automáticamente."
+                        )
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # PÁGINA: VENTAS (Historial + Auditador/Corrector)
@@ -1630,8 +1825,10 @@ def page_sales(engine):
             rows_items = []
             for it in detalle_edit["items"]:
                 sku_disp = sku_display_ed.get(it["sku"], "") if it["sku"] else ""
+                # Show catalog name when available so the user sees the verified name
+                nombre_display = it["nombre_catalogo"] or it["nombre_raw"]
                 rows_items.append({
-                    "Producto": it["nombre_raw"],
+                    "Producto": nombre_display,
                     "SKU": sku_disp,
                     "Cantidad": it["cantidad"],
                     "Precio unit.": it["precio_unitario"],

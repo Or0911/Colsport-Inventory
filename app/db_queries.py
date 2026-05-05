@@ -117,19 +117,21 @@ def get_daily_trend(_engine, start: date, end: date) -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def get_top_products(_engine, limit: int = 10) -> pd.DataFrame:
+    # Group only by (sku, catalog name) so all sales of the same SKU are
+    # summed into one row regardless of how the product was named in each message.
     with Session(_engine) as s:
         rows = s.execute(
             select(
                 VentaItem.sku,
-                func.coalesce(Producto.nombre, VentaItem.producto_nombre_raw).label("Producto"),
+                Producto.nombre.label("Producto"),
                 func.sum(VentaItem.cantidad).label("Unidades"),
                 func.coalesce(func.sum(VentaItem.subtotal), 0).label("Ingresos"),
             )
-            .outerjoin(Producto, VentaItem.sku == Producto.sku)
+            .join(Producto, VentaItem.sku == Producto.sku)
             .join(Venta, VentaItem.venta_id == Venta.id)
             .where(Venta.estado != EstadoVenta.cancelada)
             .where(VentaItem.sku.isnot(None))
-            .group_by(VentaItem.sku, Producto.nombre, VentaItem.producto_nombre_raw)
+            .group_by(VentaItem.sku, Producto.nombre)
             .order_by(desc("Unidades"))
             .limit(limit)
         ).all()
@@ -734,6 +736,89 @@ def get_purchase_detail(_engine, purchase_id: int) -> Optional[dict]:
                 for dc, prod in item_rows
             ],
         }
+
+
+# ---------------------------------------------------------------------------
+# Purchase editing — reverses old stock, applies new stock, updates header
+# ---------------------------------------------------------------------------
+
+def update_purchase_items(
+    engine,
+    purchase_id: int,
+    items: list[dict],
+    new_proveedor: Optional[str],
+) -> None:
+    """
+    Replaces all detalle_compras of a purchase and adjusts stock accordingly.
+
+    Procedure (single transaction):
+        1. Reverse stock additions from old items (subtract old quantities).
+        2. Delete old detalle_compras rows.
+        3. Insert new detalle_compras rows and add new quantities to stock.
+        4. Recalculate and update compra.monto_total and proveedor.
+
+    Each item dict must have:
+        nombre_raw              str
+        sku                     str | None
+        cantidad                int
+        precio_costo_unitario   int | None
+    """
+    from sqlalchemy import update as sql_update, delete as sql_delete
+    with Session(engine) as s:
+        # 1. Reverse old stock additions using a column expression so the DB
+        #    does the arithmetic — avoids ORM staleness if the same SKU appears
+        #    in multiple old rows or in both the reverse and apply phases.
+        old_items = s.execute(
+            select(DetalleCompra).where(DetalleCompra.compra_id == purchase_id)
+        ).scalars().all()
+
+        for old_item in old_items:
+            if old_item.producto_sku:
+                s.execute(
+                    sql_update(Producto)
+                    .where(Producto.sku == old_item.producto_sku)
+                    .values(stock_actual=Producto.stock_actual - old_item.cantidad)
+                )
+
+        # 2. Delete old items
+        s.execute(sql_delete(DetalleCompra).where(DetalleCompra.compra_id == purchase_id))
+
+        # 3. Insert new items and apply stock additions (same atomic pattern)
+        new_total = 0
+        for item in items:
+            sku = item.get("sku") or None
+            if isinstance(sku, str) and not sku.strip():
+                sku = None
+            quantity = max(int(item.get("cantidad") or 1), 1)
+            cost = int(item["precio_costo_unitario"]) if item.get("precio_costo_unitario") else None
+            if cost:
+                new_total += quantity * cost
+
+            s.add(DetalleCompra(
+                compra_id=purchase_id,
+                producto_sku=sku,
+                producto_nombre_raw=str(item["nombre_raw"]).strip() or "—",
+                cantidad=quantity,
+                precio_costo_unitario=cost,
+            ))
+
+            if sku:
+                s.execute(
+                    sql_update(Producto)
+                    .where(Producto.sku == sku)
+                    .values(stock_actual=Producto.stock_actual + quantity)
+                )
+
+        # 4. Update purchase header
+        s.execute(
+            sql_update(Compra)
+            .where(Compra.id == purchase_id)
+            .values(
+                proveedor=new_proveedor or None,
+                monto_total=new_total if new_total > 0 else None,
+            )
+        )
+        s.commit()
 
 
 # ---------------------------------------------------------------------------
