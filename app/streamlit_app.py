@@ -117,13 +117,13 @@ html, body, [class*="css"], .stApp {
     color: var(--cs-primary-text) !important;
 }
 
-/* Hide keyboard shortcut text Streamlit 1.35+ injects inside the collapse button */
+/* Hide keyboard shortcut label that Streamlit 1.35+ injects inside the toggle button */
 [data-testid="stSidebarCollapseButton"] p,
 [data-testid="stSidebarCollapseButton"] span {
     display: none !important;
 }
 
-/* Collapse button INSIDE the sidebar — white icon over dark bg */
+/* Collapse button INSIDE the open sidebar — icon must be white over dark bg */
 [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
     background: transparent !important;
     border: none !important;
@@ -134,24 +134,19 @@ html, body, [class*="css"], .stApp {
 [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
     stroke: var(--cs-primary-text) !important;
     fill: var(--cs-primary-text) !important;
-    color: var(--cs-primary-text) !important;
 }
 
-/* Expand button in the header when sidebar is COLLAPSED.
-   Header itself has pointer-events:none so it doesn't intercept main-content clicks;
-   we re-enable pointer-events only on the toggle button. */
-[data-testid="stHeader"] {
-    pointer-events: none !important;
-}
-[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"],
-[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button {
-    pointer-events: all !important;
-}
+/* Expand button that appears in the header when sidebar is COLLAPSED.
+   No pointer-events manipulation: Streamlit's layout already places the header
+   above (not overlapping) the main content, so clicks reach content normally. */
 [data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button {
     background: var(--cs-primary) !important;
     border: none !important;
     border-radius: 6px !important;
     padding: 6px !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: flex !important;
 }
 [data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button:hover {
     background: var(--cs-primary-dark) !important;
@@ -159,7 +154,6 @@ html, body, [class*="css"], .stApp {
 [data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] svg {
     stroke: var(--cs-primary-text) !important;
     fill: var(--cs-primary-text) !important;
-    color: var(--cs-primary-text) !important;
 }
 
 /* Primary button */
@@ -276,13 +270,14 @@ html, body, [class*="css"], .stApp {
 /* Dataframe */
 .stDataFrame { background: #fffef9 !important; }
 
-/* Hide streamlit chrome — keep header in DOM so the sidebar expand button works */
+/* Header: transparent so it doesn't show Streamlit branding.
+   Kept in the DOM (not display:none) so the sidebar expand button remains accessible. */
 [data-testid="stHeader"] {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
 }
-/* Hide the right-side toolbar (deploy button, running indicator) */
+/* Hide Streamlit chrome elements */
 [data-testid="stToolbar"] { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
 #MainMenu { display: none !important; }

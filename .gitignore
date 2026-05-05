@@ -2,5 +2,9 @@ venv/
 .env
 *.csv
 __pycache__/
+**/__pycache__/
 *.pyc
+*.pyo
+*.pyd
 ProductosActualizacion-es.xlsx
+.streamlit/secrets.toml

@@ -2,7 +2,7 @@
 
 Omnichannel automation system for a Colombian sports supplements and equipment business.
 Transforms WhatsApp, Rappi, and Instagram messages into structured database records,
-with a web interface for sales management, analytics, and inventory tracking.
+with a web interface for sales management, analytics, inventory tracking, and purchase editing.
 
 Deployed at: **Streamlit Community Cloud** (accessible from any phone or computer)
 
@@ -32,7 +32,7 @@ save_sale()                 ← 1 transaction: sale + items + payment + shipping
 PostgreSQL (Supabase)       ← source of truth
             │
             ▼
-Streamlit Dashboard         ← web interface: sales, analytics, inventory, purchases
+Streamlit Dashboard         ← web interface: sales, purchases, analytics, inventory
 ```
 
 ---
@@ -44,7 +44,7 @@ Streamlit Dashboard         ← web interface: sales, analytics, inventory, purc
 | AI Engine | OpenAI GPT-4o-mini |
 | Validation | Pydantic v2 |
 | ORM / DB | SQLAlchemy 2.0 + PostgreSQL (Supabase) |
-| Web Interface | Streamlit + Plotly |
+| Web Interface | Streamlit ≥ 1.35 + Plotly |
 | Config | python-dotenv |
 | Tests | pytest |
 
@@ -69,17 +69,18 @@ Streamlit Dashboard         ← web interface: sales, analytics, inventory, purc
 col-inventory-app/
 ├── api/
 │   ├── motor_ia.py            # AI parser: raw message → ParsedSale
-│   ├── guardar_venta.py       # Persistence: ParsedSale → DB + stock deduction
+│   ├── guardar_venta.py       # Persistence: ParsedSale → DB + stock deduction + Rappi sync
 │   ├── purchase_parser.py     # AI parser: supplier text → ParsedPurchase
-│   └── guardar_compra.py      # Persistence: purchase DataFrame → DB + stock addition
+│   ├── guardar_compra.py      # Persistence: purchase DataFrame → DB + stock addition + Rappi sync
+│   └── rappi_client.py        # HTTP client to enable/disable products in Rappi
 ├── app/
-│   ├── streamlit_app.py       # Main web interface (login, nav, 4 modules)
-│   ├── db_queries.py          # Cached queries for dashboard and pages
-│   └── charts.py              # Interactive Plotly charts (dark theme)
+│   ├── streamlit_app.py       # Main web interface (login, nav, 6 pages)
+│   ├── db_queries.py          # Cached read queries + write helpers
+│   └── charts.py              # Interactive Plotly charts
 ├── models/
-│   ├── venta.py               # Sale + SaleStatus (pendiente/confirmada/despachada…)
+│   ├── venta.py               # Sale + SaleStatus enum
 │   ├── venta_item.py          # Product line with matched SKU
-│   ├── producto.py            # Catalog with stock_actual
+│   ├── producto.py            # Catalog: stock_actual, rappi_product_id, alias
 │   ├── cliente.py             # Customer (deduplicated by cedula)
 │   ├── canal.py               # Sales channel
 │   ├── pago.py                # Payment method and destination account
@@ -92,12 +93,16 @@ col-inventory-app/
 │   └── base.py                # Shared DeclarativeBase
 ├── scripts/
 │   ├── create_tables.py       # Creates all tables in the DB
+│   ├── migrate_rappisync.py   # DB migration: rappi_product_id + unique constraint
+│   ├── migrate_alias.py       # DB migration: alias column on productos
+│   ├── mapear_rappi_skus.py   # Fills rappi_product_id from ProductosActualizacion-es.xlsx
 │   ├── reset_data.py          # Clears all sales/purchases and zeros stock
-│   ├── consolidate_and_import.py  # ETL: imports product catalog from CSV
 │   └── procesar_venta.py      # CLI: process a message from the console
 ├── tests/
 │   ├── test_motor_ia.py       # Tests: normalization, calculations, parsing
 │   └── test_guardar_venta.py  # Tests: SKU matching, SQLite integration
+├── assets/
+│   └── logo.png               # Colsports logo (PNG, transparent bg)
 ├── .env.example               # Environment variables template
 ├── .gitignore
 └── requirements.txt
@@ -132,9 +137,19 @@ Edit `.env` with your credentials:
 DATABASE_URL=postgresql://user:password@host:port/dbname
 OPENAI_API_KEY=sk-proj-...
 APP_PASSWORD=your_secure_password
+
+# Optional: visual theme
+THEME_PRIMARY=#314457
+THEME_PRIMARY_DARK=#243344
+THEME_PRIMARY_TEXT=#ffffff
+
+# Optional: Rappi sync
+RAPPI_CLIENT_ID=...
+RAPPI_CLIENT_SECRET=...
+RAPPI_STORE_ID=900283093
 ```
 
-> The `.env` file is in `.gitignore`. Never commit it to the repository.
+> The `.env` file is in `.gitignore`. Never commit it.
 
 ### 3. Create database tables
 
@@ -142,10 +157,11 @@ APP_PASSWORD=your_secure_password
 python scripts/create_tables.py
 ```
 
-### 4. Import product catalog (optional)
+### 4. Run database migrations (first deploy or after upgrade)
 
 ```bash
-python scripts/consolidate_and_import.py
+python scripts/migrate_rappisync.py   # adds rappi_product_id column
+python scripts/migrate_alias.py       # adds alias column
 ```
 
 ### 5. Run the app
@@ -158,87 +174,112 @@ Open `http://localhost:8501`. Password is set with `APP_PASSWORD` in `.env`.
 
 ---
 
-## Web Interface Modules
+## Web Interface Pages
 
-| Module | What it does |
+| Page | Description |
 |---|---|
-| **Nueva Venta** | Paste message → AI parsing → preview → confirm and save to DB |
-| **Dashboard** | KPIs (today/month), daily trend, sales by channel, top products |
-| **Inventario** | Catalog with search, negative/low stock alerts, combo virtual stock, hot products |
-| **Compras** | Paste supplier message → AI parsing → review table → confirm and update stock |
+| **Nueva Venta** | Paste message → AI parsing → preview → confirm and save |
+| **Dashboard** | KPIs (period/today/month), daily trend, channel distribution, top 5 products, money by account |
+| **Inventario** | Catalog with search, negative stock alerts, combo virtual stock, hot products |
+| **Compras** | Paste supplier message → review table → confirm and update stock. History with inline editing (24 h window, full stock reversal + reapply) |
+| **Ventas** | Filterable history + detail viewer + inline editing (24 h window, no stock adjustment) |
+| **Catálogo / Aliases** | Manage product aliases used as fallback in SKU matching |
 
 ---
 
-## How to Add New Products to the Catalog
+## SKU Matching
 
-Products are stored in the `productos` table. There are two ways to add them:
+`_match_sku()` in `api/guardar_venta.py` uses F1-score between tokenized product name and catalog entries:
 
-### Option A — Direct SQL in Supabase (recommended for bulk)
+1. Tokenizes raw name (digit-letter boundary split, minimal stemming).
+2. Scores against `producto.nombre` — 60 % recall threshold.
+3. If score = 0, falls back to each comma-separated entry in `producto.alias`.
+4. Returns the SKU with the highest score, or `None`.
 
-Go to your Supabase project → SQL Editor and run:
+**Aliases allow distinguishing variants** that share the same base name:
+```sql
+-- Example: distinguish Creatina variants by alias
+UPDATE productos SET alias = 'Creatina Creasmart 550g Sin sabor, Creasmart sin sabor'
+WHERE sku = '2045';
+```
+
+---
+
+## Sale and Purchase Editing (24-hour window)
+
+Both the Ventas and Compras history pages show an **editable records** section for records created in the last 24 hours.
+
+- **Purchase edit**: full stock reversal of old items → delete lines → insert new lines → apply new stock. Atomic single transaction.
+- **Sale edit**: replaces items, recalculates totals, updates status and notes. **Stock is NOT adjusted** — correct via a purchase if quantities changed.
+
+---
+
+## Rappi Sync
+
+When a product's stock changes, the system automatically enables or disables it in Rappi:
+
+- **Sale recorded** → stock drops to 0 → product disabled in Rappi.
+- **Purchase recorded** → stock rises above 0 → product re-enabled in Rappi.
+
+Requires `RAPPI_CLIENT_ID`, `RAPPI_CLIENT_SECRET`, and `RAPPI_STORE_ID` in `.env`.
+Silent no-op if not configured.
+
+---
+
+## How to Add Products and Aliases
+
+### Add a new product
 
 ```sql
 INSERT INTO productos (sku, nombre, marca, categoria, stock_actual)
-VALUES
-  ('SKU-001', 'Creatina IMN 133 serv 550g', 'IMN', 'Suplementos', 0),
-  ('SKU-002', 'Whey Protein IMN 2lb Chocolate', 'IMN', 'Suplementos', 0);
+VALUES ('1999', 'Whey Protein IMN 2lb Chocolate', 'IMN', 'Proteinas', 0);
 ```
 
-Rules:
-- `sku` must be unique and never change (it is the permanent identifier used for stock tracking)
-- `stock_actual` starts at `0`; use the **Compras** module to fill it
-- `categoria` is free text — use consistent values for the dashboard to group correctly
+Or use the **Catálogo / Aliases** page in the app.
 
-### Option B — Edit the CSV and re-import
+### Add aliases to help the AI match variants
 
-1. Edit `suplementos.csv` or `implementos.csv` with the new products
-2. Run `python scripts/consolidate_and_import.py`
+```sql
+UPDATE productos SET alias = 'Alias 1, Alias 2, Alias 3'
+WHERE sku = 'XXXX';
+```
+
+Or use the **Catálogo / Aliases** page in the app.
 
 ---
 
 ## How to Add Combos
 
-A combo is a product SKU whose stock is derived from its component SKUs.
-When a combo is sold, stock is deducted from each component, not from the combo itself.
-
-### Step 1 — Create the combo as a regular product
-
 ```sql
-INSERT INTO productos (sku, nombre, marca, categoria, stock_actual)
-VALUES ('COMBO-001', 'Kit Inicio Deportivo', 'Colsports', 'Combos', 0);
-```
+-- 1. Create the combo as a regular product (stock stays 0)
+INSERT INTO productos (sku, nombre, stock_actual)
+VALUES ('COMBO-001', 'Kit Inicio Deportivo', 0);
 
-### Step 2 — Define its components
-
-Each row in `combo_componentes` means: "to make 1 unit of this combo, use N units of this component".
-
-```sql
+-- 2. Define its components
 INSERT INTO combo_componentes (combo_sku, componente_sku, cantidad)
-VALUES
-  ('COMBO-001', 'SKU-001', 1),   -- 1 unit of Creatina IMN
-  ('COMBO-001', 'SKU-002', 1);   -- 1 unit of Whey Protein IMN
+VALUES ('COMBO-001', 'SKU-A', 1), ('COMBO-001', 'SKU-B', 1);
 ```
 
-### How it works at sale time
-
-When `COMBO-001` is sold:
-- `SKU-001` stock decreases by 1
-- `SKU-002` stock decreases by 1
-- If any component goes negative, an alert is created in `alertas_pedido`
-
-The **Inventario → Combos** tab shows the virtual stock (how many combos can be assembled with current component stock).
+Or edit `scripts/setup_combos.py` and re-run it (idempotent).
 
 ---
 
-## Reset Data (start fresh)
+## Rollback / Safe Point
+
+The tag `v1.1-stable` marks a known-good commit:
 
 ```bash
-python scripts/reset_data.py
+git reset --hard v1.1-stable   # revert working directory
+git push --force origin main   # push rollback (confirm first)
 ```
 
-Clears: all sales, purchases, payments, shipping, and restock alerts.
-Sets all product `stock_actual` to 0.
-Does NOT touch: product catalog, combos, or channel/payment configuration.
+---
+
+## Reset Data (development only)
+
+```bash
+python scripts/reset_data.py   # clears sales/purchases, zeros all stock
+```
 
 ---
 
@@ -246,36 +287,29 @@ Does NOT touch: product catalog, combos, or channel/payment configuration.
 
 | Table | Description |
 |---|---|
-| `ventas` | Sale header: channel, customer, amounts, status, original message, extracted JSON |
-| `venta_items` | Product lines per sale with matched SKU, quantity, and unit price |
-| `productos` | Product catalog with `stock_actual` (auto-decremented on sale) |
+| `productos` | Catalog: sku (PK), nombre, stock_actual, rappi_product_id, alias |
+| `ventas` | Sale header: channel, customer, amounts, status, original message |
+| `venta_items` | Product lines: matched SKU, quantity, unit price |
 | `clientes` | Customers deduplicated by cedula |
-| `canales` | Sales channels (WhatsApp, Local, Rappi, etc.) |
-| `pagos` | Payment method, destination account, and amount |
-| `envios` | Shipping address, city, and department |
-| `rappi_detalles` | Order ID, type (Regular/Pro), commission % and calculated amount |
-| `compras` | Purchase order header: supplier, date, total amount |
-| `detalle_compras` | Purchase line items: raw name, matched SKU, quantity, unit cost |
-| `combo_componentes` | Combo → component mapping with quantity per unit |
+| `canales` | Sales channels |
+| `pagos` | Payment method and destination account |
+| `envios` | Shipping address |
+| `rappi_detalles` | Rappi order ID, type, commission (unique constraint on order_id) |
+| `compras` | Purchase header: supplier, date, total |
+| `detalle_compras` | Purchase line items: raw name, matched SKU, quantity, cost |
+| `combo_componentes` | Combo → component mapping |
 | `alertas_pedido` | Restock alerts when combo components go negative |
-
-### Sale lifecycle
-
-```
-pendiente → confirmada → despachada → entregada
-                                  ↘ cancelada
-```
 
 ---
 
 ## Design Decisions
 
-- **LLM extracts, never calculates.** All amounts are computed in Python (`calculate_amounts()`), never by the model. This eliminates hallucinated totals.
-- **F1-score SKU matching.** `_match_sku()` combines recall and precision so kits/combos do not outscore individual products. Includes plural→singular stemming and digit-letter tokenization.
-- **Single transaction.** `save_sale()` and `save_purchase()` persist everything in one `commit`. If anything fails, nothing is saved.
-- **`total_declarado`** handles messages with a global price and no per-item breakdown.
-- **`session_state` in Streamlit** preserves the parsed sale while the user reviews the preview before confirming.
-- **Backward-compatible aliases.** All renamed functions keep Spanish aliases so existing scripts and tests continue to work without modification.
+- **LLM extracts, never calculates.** All amounts computed in Python, never by the model.
+- **F1-score SKU matching with alias fallback.** Combines recall and precision; checks `alias` field when `nombre` doesn't match.
+- **Single transaction per write.** `save_sale()`, `save_purchase()`, `update_purchase_items()` — everything or nothing.
+- **Column expressions in stock UPDATEs.** `values(stock_actual=Producto.stock_actual ± qty)` — DB performs the arithmetic atomically, avoiding ORM cache staleness.
+- **24-hour edit window.** Limits retroactive corrections; errors obvious on the same day.
+- **Sale edit does not adjust stock.** Sale = product already left the store. Purchase edit does adjust stock: purchase = physical receiving of goods.
 
 ---
 
@@ -284,15 +318,3 @@ pendiente → confirmada → despachada → entregada
 ```bash
 pytest tests/ -v
 ```
-
-Tests cover: text normalization, amount calculation, OpenAI-mocked parsing, F1-score SKU matching, and SQLite in-memory integration.
-
----
-
-## Roadmap
-
-See the Scaling Plan section in the project documentation for:
-- Rappi inventory sync (webhook or polling approach)
-- WhatsApp Business API integration (eliminate copy-paste)
-- PDF/Excel report exports
-- Product alias system (e.g. "92 serv" ↔ "550g")

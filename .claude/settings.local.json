@@ -6,7 +6,15 @@
       "Bash(venv/Scripts/python -m pytest tests/ -v)",
       "PowerShell(& \"C:\\\\Users\\\\ORMAN\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\" --version 2>&1)",
       "PowerShell(& \"C:\\\\Users\\\\ORMAN\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\" -m pytest --version 2>&1)",
-      "Bash(venv/Scripts/python.exe scripts/procesar_venta.py 'VENTA WHATSAPP *)"
+      "Bash(venv/Scripts/python.exe scripts/procesar_venta.py 'VENTA WHATSAPP *)",
+      "Bash(ls *.xlsx)",
+      "Bash(dir /b *.xlsx)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(python scripts/mapear_rappi_skus.py)",
+      "Bash(python -m py_compile app/streamlit_app.py)",
+      "Bash(python -m py_compile app/db_queries.py)",
+      "Bash(grep -E \"\\\\.\\(pyc\\)$|__pycache__\")"
     ]
   }
 }

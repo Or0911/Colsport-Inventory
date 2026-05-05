@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-05.
+> Actualizado el 2026-05-05 (v1.1-stable).
 
 ---
 
@@ -418,8 +418,8 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 | Ventana de 24h para edición | Limita el impacto de correcciones retroactivas; errores evidentes se corrigen el mismo día |
 | Widget keys incluyen ID del registro | Evita conflictos en session_state cuando múltiples formularios de edición comparten la página |
 | Logo en login como base64 en HTML | `st.image()` dentro de una columna no permite anidarse dentro de un div HTML; la alternativa es embeber la imagen en el propio bloque HTML |
-| CSS sidebar con pointer-events | `pointer-events: none` en el header contenedor evita que bloquee clicks del contenido principal; se reactiva con `pointer-events: all` solo en el botón de toggle |
+| CSS sidebar sin pointer-events | El header de Streamlit está encima del contenido (no sobre él) por el padding-top del layout; NO es necesario `pointer-events: none`. Se aplica solo estilo visual transparente + `opacity/visibility/display: flex` explícitos en el botón de expandir para asegurar visibilidad |
 | Nombres de campos Pydantic en español | Los JSON keys deben coincidir con lo que el LLM retorna; cambiarlos rompería el prompt |
 | `st.stop()` no va dentro de `try/except` | En Streamlit, `StopException` hereda de `BaseException`; un `except Exception` genérico puede capturarlo y silenciarlo |
 | `cs-card` no debe envolver widgets nativos | `st.markdown('<div class="cs-card">', ...)` seguido de widgets nativos de Streamlit genera una barra visual vacía: el div HTML y los widgets son nodos DOM hermanos, no padre/hijo |
-| `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra; `__pycache__/` debe estar en `.gitignore` |
+| `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra. `.gitignore` cubre `__pycache__/`, `**/__pycache__/`, `*.pyc`, `*.pyo`. Los archivos ya trackeados se eliminaron del índice con `git rm -r --cached` |
