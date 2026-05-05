@@ -305,11 +305,41 @@ from app.charts import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+EDIT_WINDOW_HOURS = 24
+
+
 def fmt_cop(v) -> str:
     try:
         return f"${int(v):,}".replace(",", ".")
     except Exception:
         return str(v)
+
+
+def _is_editable(fecha) -> bool:
+    """Returns True if the record is within the allowed edit window."""
+    if fecha is None:
+        return False
+    from datetime import datetime, timedelta
+    if not isinstance(fecha, datetime):
+        fecha = datetime.combine(fecha, datetime.min.time())
+    return datetime.now() - fecha < timedelta(hours=EDIT_WINDOW_HOURS)
+
+
+def _edit_locked_banner(fecha) -> None:
+    """Renders a locked banner showing when the record was created."""
+    from datetime import datetime
+    if not isinstance(fecha, datetime):
+        from datetime import datetime as _dt
+        fecha = _dt.combine(fecha, _dt.min.time())
+    fecha_str = fecha.strftime("%d/%m/%Y %H:%M")
+    st.markdown(
+        f'<div style="background:#fff8f2;border:1.5px solid #c89070;border-radius:6px;'
+        f'padding:12px 16px;font-family:Poppins,sans-serif;color:#7a4a1a;margin-bottom:8px">'
+        f'🔒 <b>Edición bloqueada.</b> Este registro fue creado el <b>{fecha_str}</b> '
+        f'y solo puede editarse dentro de las primeras <b>{EDIT_WINDOW_HOURS} horas</b>.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def init_session():
@@ -1557,10 +1587,16 @@ def page_purchases(engine):
         if detalle_compra_edit is None and buscar_compra_btn:
             st.warning(f"No existe ninguna compra con ID #{int(edit_compra_id)}")
         elif detalle_compra_edit:
+            editable_compra = _is_editable(detalle_compra_edit.get("fecha"))
             st.markdown('<div class="cs-card">', unsafe_allow_html=True)
 
             with st.expander("📄 Compra actual (referencia)", expanded=False):
                 _render_purchase_detail(detalle_compra_edit)
+
+            if not editable_compra:
+                _edit_locked_banner(detalle_compra_edit.get("fecha"))
+                st.markdown('</div>', unsafe_allow_html=True)
+                return
 
             st.markdown(
                 "<div style='font-size:16px;font-weight:700;color:#1a1a1a;"
@@ -1789,11 +1825,17 @@ def page_sales(engine):
         if detalle_edit is None and buscar_btn:
             st.warning(f"No existe venta #{int(edit_id)}")
         elif detalle_edit:
+            editable_venta = _is_editable(detalle_edit.get("fecha"))
             st.markdown('<div class="cs-card">', unsafe_allow_html=True)
 
             # ── Venta actual (lectura) ──
             with st.expander("📄 Venta actual (referencia)", expanded=False):
                 _render_sale_detail(detalle_edit)
+
+            if not editable_venta:
+                _edit_locked_banner(detalle_edit.get("fecha"))
+                st.markdown('</div>', unsafe_allow_html=True)
+                return
 
             st.markdown(
                 "<div style='font-size:16px;font-weight:700;color:#1a1a1a;"
