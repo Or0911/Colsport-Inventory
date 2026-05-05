@@ -645,7 +645,7 @@ def page_new_sale(engine):
                 with st.spinner("Guardando en base de datos..."):
                     try:
                         from sqlalchemy.orm import Session as DBSession
-                        from api.guardar_venta import save_sale
+                        from api.guardar_venta import save_sale, DuplicateRappiOrderError
                         with DBSession(engine) as session:
                             v_guardada = save_sale(session, venta, msg)
                             session.commit()
@@ -668,6 +668,13 @@ def page_new_sale(engine):
                         get_kpis_period.clear()
 
                         st.rerun()
+                    except DuplicateRappiOrderError as e:
+                        st.warning(
+                            f"⚠️ **Orden Rappi duplicada — no se guardó.**\n\n"
+                            f"La orden **{e.order_id}** ya fue registrada anteriormente. "
+                            f"El stock **no fue descontado**. "
+                            f"Si la orden es nueva, verifica el Order ID antes de continuar."
+                        )
                     except Exception as e:
                         st.error(f"Error al guardar: {e}")
         with b2:

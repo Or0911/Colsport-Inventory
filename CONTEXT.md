@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-01.
+> Actualizado el 2026-05-02.
 
 ---
 
@@ -28,7 +28,7 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 | Validación | Pydantic v2 |
 | Deploy | Streamlit Community Cloud |
 | Fuente tipográfica | Google Fonts — Poppins (sans-serif) |
-| Assets estáticos | `assets/logo.png` (logo Colsports, con fallback a texto si no existe) |
+| Assets estáticos | `assets/logo.png` — logo Colsports horizontal (PNG con fondo transparente ideal). Fallback a texto "COLSPORTS" si no existe. Se muestra en login (220px) y sidebar (150px). |
 | Estilos | CSS custom con variables `--cs-*` inyectadas desde dict `THEME` |
 
 ---
@@ -44,9 +44,10 @@ col-inventory-app/
 │
 ├── api/
 │   ├── motor_ia.py          ← Parsea mensaje WhatsApp → ParsedSale (OpenAI)
-│   ├── guardar_venta.py     ← Persiste ParsedSale en DB + descuenta stock
+│   ├── guardar_venta.py     ← Persiste ParsedSale en DB + descuenta stock + sync Rappi
 │   ├── purchase_parser.py   ← Parsea texto proveedor → ParsedPurchase (OpenAI)
-│   └── guardar_compra.py    ← Persiste compra en DB + suma stock
+│   ├── guardar_compra.py    ← Persiste compra en DB + suma stock + sync Rappi
+│   └── rappi_client.py      ← Sincroniza disponibilidad con Rappi (encender/apagar producto)
 │
 ├── models/
 │   ├── __init__.py          ← Exporta todos los modelos
@@ -68,6 +69,7 @@ col-inventory-app/
 │   ├── create_tables.py     ← Crea todas las tablas en la DB (correr una vez)
 │   ├── reset_data.py        ← TRUNCATE tablas transaccionales + stock=0 (pide "RESET")
 │   ├── setup_combos.py      ← Inserta filas en combo_componentes (safe to re-run)
+│   ├── mapear_rappi_skus.py ← Rellena rappi_product_id desde ProductosActualizacion-es.xlsx
 │   └── consolidate_and_import.py ← Importación masiva histórica (legacy)
 │
 ├── .env                     ← DATABASE_URL, OPENAI_API_KEY, APP_PASSWORD (local)
@@ -170,7 +172,7 @@ guardar_compra.save_purchase()
 
 | Tabla | Descripción |
 |---|---|
-| `productos` | Catálogo de productos (sku, nombre, marca, categoria, stock_actual) |
+| `productos` | Catálogo de productos (sku, nombre, marca, categoria, stock_actual, rappi_product_id) |
 | `canales` | WhatsApp / Rappi / Rappi Pro / Local / TikTok Live / Instagram |
 | `clientes` | Compradores (cedula como deduplicador) |
 | `ventas` | Cabecera de venta (canal, cliente, totales, estado, mensaje_original, json_extraido) |
@@ -216,7 +218,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ---
 
-## 11. Estado actual (2026-05-02)
+## 11. Estado actual (2026-05-05)
 
 ### ✅ Funcionando en producción (main)
 - Login con contraseña
@@ -279,6 +281,50 @@ Nuevas funciones en `db_queries.py`:
 Nuevas funciones helper en `streamlit_app.py`:
 - `_render_sale_detail(detalle)` → renderiza el dict de detalle de venta; compartido entre Dashboard y página Ventas.
 - `_render_purchase_detail(detalle)` → renderiza el dict de detalle de compra; usado en el historial de Compras.
+
+### 🔀 Rama `rappisync` (lista para merge)
+
+Funcionalidad de sincronización automática de disponibilidad con Rappi:
+
+1. **`models/producto.py`:** nueva columna `rappi_product_id` (String, nullable). Almacena el ID del producto en el catálogo de Rappi (ej: `2126240804`). Null si el producto no está publicado en Rappi.
+
+2. **`models/rappi_detalle.py`:** `UniqueConstraint` sobre `order_id` (`uq_rappi_detalles_order_id`). Previene el doble descuento de stock cuando se registra manualmente una orden que Rappi ya notificó.
+
+3. **`scripts/mapear_rappi_skus.py`:** lee `ProductosActualizacion-es.xlsx` (columna SKU formato `Colsports_XXXX` → extrae el SKU local; columna `ID del producto` → `rappi_product_id`) y rellena la tabla `productos`. Correr una vez tras la migración de DB.
+
+4. **`api/rappi_client.py`:** cliente HTTP para sincronizar con la API de Rappi. Funciones:
+   - `sync_after_sale(sku, rappi_product_id, new_stock)` → si `new_stock ≤ 0`, apaga el producto en Rappi.
+   - `sync_after_purchase(sku, rappi_product_id, new_stock)` → si `new_stock > 0`, enciende el producto en Rappi.
+   - No-op silencioso si `RAPPI_CLIENT_ID` no está configurado.
+
+5. **`api/guardar_venta.py`:**
+   - `DuplicateRappiOrderError`: excepción lanzada si el `order_id` ya existe en `rappi_detalles`.
+   - La UI debe capturarla y mostrar aviso al usuario.
+   - `_deduct_stock()` ahora retorna `list[(sku, new_stock, rappi_product_id)]`.
+   - `save_sale()` llama a `sync_after_sale()` para cada producto afectado.
+
+6. **`api/guardar_compra.py`:** llama a `sync_after_purchase()` para cada SKU válido tras sumar stock.
+
+**Variables de entorno requeridas para el sync:**
+```
+RAPPI_CLIENT_ID       = ...   # Del partner portal de Rappi
+RAPPI_CLIENT_SECRET   = ...   # Del partner portal de Rappi
+RAPPI_STORE_ID        = 900283093   # ID de tienda COLSPORTS en Rappi
+# Opcionales (tienen defaults):
+RAPPI_AUTH_URL        = https://auth.rappi.com/api/auth/token
+RAPPI_API_BASE_URL    = https://microservices.dev.rappi.com
+```
+
+**Migración de DB necesaria antes de activar:**
+```sql
+ALTER TABLE productos ADD COLUMN IF NOT EXISTS rappi_product_id VARCHAR(30);
+ALTER TABLE rappi_detalles ADD CONSTRAINT uq_rappi_detalles_order_id UNIQUE (order_id);
+```
+
+**Flujo operativo:**
+- Venta Local/WhatsApp → stock baja → si llega a 0 → sistema apaga el producto en Rappi automáticamente.
+- Venta en Rappi → se registra en la app → sistema valida que no sea duplicado → descuenta stock local.
+- Ingreso de mercancía → stock sube de 0 → sistema enciende el producto en Rappi.
 
 ### 🔀 Rama `CombosManage` (pendiente de merge)
 - Mejora de `_match_sku`: también busca en campo `alias` (nombres alternativos) por producto.
@@ -345,7 +391,7 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 - **Resumen de ventas del día:** vista rápida para cierre diario.
 
 ### Prioridad media
-- **Sincronización Rappi:** webhook o polling a la API de Rappi para importar órdenes automáticamente sin copiar/pegar.
+- **Sincronización Rappi:** ✅ disponibilidad automática implementada en rama `rappisync`. Pendiente: webhook o polling para importar órdenes automáticamente sin copiar/pegar.
 - **WhatsApp Business API:** recibir mensajes directamente vía webhook, parsear y registrar sin abrir la app.
 - **Exportación a Excel/CSV:** desde el historial de ventas y compras.
 

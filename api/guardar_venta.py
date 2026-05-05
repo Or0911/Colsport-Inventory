@@ -42,6 +42,14 @@ from models import (
     ComboComponente, AlertaPedido,
 )
 from api.motor_ia import ParsedSale, calculate_amounts
+from api.rappi_client import sync_after_sale
+
+
+class DuplicateRappiOrderError(Exception):
+    """Se lanza cuando el order_id de Rappi ya existe en la base de datos."""
+    def __init__(self, order_id: str):
+        self.order_id = order_id
+        super().__init__(f"La orden de Rappi '{order_id}' ya fue registrada anteriormente.")
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +201,7 @@ def _deduct_stock(
     session: Session,
     matched_items: list[tuple[str, int]],
     sale_id: int,
-) -> None:
+) -> list[tuple]:
     """
     Deducts stock for each sold product.
 
@@ -201,7 +209,13 @@ def _deduct_stock(
     - If a component goes negative after deduction, creates an alertas_pedido row
       for restocking follow-up.
     - Negative stock on regular products is intentional: indicates a sale without stock.
+
+    Returns:
+        List of (sku, new_stock, rappi_product_id) for every affected product,
+        used by the caller to sync availability with Rappi.
     """
+    affected: list[tuple[str, int, str | None]] = []
+
     # Load into memory which SKUs are combos and their components
     combo_map: dict[str, list[tuple[str, int]]] = {}
     sold_skus = [sku for sku, _ in matched_items]
@@ -236,13 +250,23 @@ def _deduct_stock(
                         componente_nombre=product.nombre,
                         cantidad_faltante=abs(stock_after),
                     ))
+                affected.append((comp_sku, stock_after, product.rappi_product_id))
         else:
             # Regular product: direct deduction
+            product = session.execute(
+                select(Producto).where(Producto.sku == sku)
+            ).scalar_one_or_none()
+            if product is None:
+                continue
+            stock_after = product.stock_actual - quantity
             session.execute(
                 update(Producto)
                 .where(Producto.sku == sku)
-                .values(stock_actual=Producto.stock_actual - quantity)
+                .values(stock_actual=stock_after)
             )
+            affected.append((sku, stock_after, product.rappi_product_id))
+
+    return affected
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +280,8 @@ def save_sale(session: Session, parsed_sale: ParsedSale, original_text: str) -> 
     - Amounts (subtotal, discount, total) are calculated in Python, not from the LLM.
     - The product catalog is loaded once for all items.
     - Saves the structured JSON and original text for auditing.
+    - For Rappi orders: validates that the order_id hasn't been registered before.
+      Raises DuplicateRappiOrderError if it already exists.
 
     Args:
         session:       Active SQLAlchemy session (without commit).
@@ -265,6 +291,15 @@ def save_sale(session: Session, parsed_sale: ParsedSale, original_text: str) -> 
     Returns:
         Newly created Venta object with assigned id.
     """
+    # Guard: prevent double stock deduction from the same Rappi order
+    if parsed_sale.rappi_detalle and parsed_sale.rappi_detalle.order_id:
+        order_id = parsed_sale.rappi_detalle.order_id
+        existing = session.execute(
+            select(RappiDetalle).where(RappiDetalle.order_id == order_id)
+        ).scalar_one_or_none()
+        if existing:
+            raise DuplicateRappiOrderError(order_id)
+
     amounts = calculate_amounts(parsed_sale)
 
     channel = _get_or_create_channel(session, parsed_sale.canal)
@@ -328,7 +363,12 @@ def save_sale(session: Session, parsed_sale: ParsedSale, original_text: str) -> 
         )
         session.add(rappi)
 
-    _deduct_stock(session, matched_items, sale.id)
+    affected = _deduct_stock(session, matched_items, sale.id)
+
+    # Sync Rappi availability after stock changes (fire-and-forget, no-op if unconfigured)
+    for sku, new_stock, rappi_product_id in affected:
+        if rappi_product_id:
+            sync_after_sale(sku, rappi_product_id, new_stock)
 
     return sale
 

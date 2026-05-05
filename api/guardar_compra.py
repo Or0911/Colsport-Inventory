@@ -25,6 +25,7 @@ _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _root)
 
 from models import Compra, DetalleCompra, Producto
+from api.rappi_client import sync_after_purchase
 
 
 def save_purchase(
@@ -79,15 +80,19 @@ def save_purchase(
 
         # Add stock only if the SKU exists in the catalog
         if sku:
-            exists = session.execute(
-                select(Producto.sku).where(Producto.sku == sku)
+            product = session.execute(
+                select(Producto).where(Producto.sku == sku)
             ).scalar_one_or_none()
-            if exists:
+            if product:
+                new_stock = product.stock_actual + quantity
                 session.execute(
                     update(Producto)
                     .where(Producto.sku == sku)
-                    .values(stock_actual=Producto.stock_actual + quantity)
+                    .values(stock_actual=new_stock)
                 )
+                # Sync Rappi: if stock went above 0, re-enable the product
+                if product.rappi_product_id:
+                    sync_after_purchase(sku, product.rappi_product_id, new_stock)
 
     return purchase
 
