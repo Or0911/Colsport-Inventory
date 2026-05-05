@@ -117,6 +117,12 @@ html, body, [class*="css"], .stApp {
     color: var(--cs-primary-text) !important;
 }
 
+/* Hide keyboard shortcut text Streamlit 1.35+ injects inside the collapse button */
+[data-testid="stSidebarCollapseButton"] p,
+[data-testid="stSidebarCollapseButton"] span {
+    display: none !important;
+}
+
 /* Collapse button INSIDE the sidebar — white icon over dark bg */
 [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button {
     background: transparent !important;
@@ -131,8 +137,16 @@ html, body, [class*="css"], .stApp {
     color: var(--cs-primary-text) !important;
 }
 
-/* Expand button that appears in the header when sidebar is COLLAPSED */
-/* The header is made transparent; only this button remains visible */
+/* Expand button in the header when sidebar is COLLAPSED.
+   Header itself has pointer-events:none so it doesn't intercept main-content clicks;
+   we re-enable pointer-events only on the toggle button. */
+[data-testid="stHeader"] {
+    pointer-events: none !important;
+}
+[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"],
+[data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button {
+    pointer-events: all !important;
+}
 [data-testid="stHeader"] [data-testid="stSidebarCollapseButton"] button {
     background: var(--cs-primary) !important;
     border: none !important;
@@ -405,21 +419,36 @@ def page_login():
 
     with col_card:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+
+        # Embed logo as base64 so it renders inside the HTML card block
+        import base64 as _b64
+        _logo_login = os.path.join(_root, "assets", "logo.png")
+        if os.path.exists(_logo_login):
+            with open(_logo_login, "rb") as _lf:
+                _logo_b64 = _b64.b64encode(_lf.read()).decode()
+            _logo_img_html = (
+                f"<img src='data:image/png;base64,{_logo_b64}' "
+                "style='width:160px;display:block;margin:0 auto 20px;'>"
+            )
+        else:
+            _logo_img_html = (
+                "<div style='font-size:24px;font-weight:700;color:#1a3a5c;"
+                "font-family:Poppins,sans-serif;text-align:center;margin-bottom:16px'>"
+                "COL SPORTS</div>"
+            )
+
         st.markdown(
+            f"<div class='login-card'>"
+            f"{_logo_img_html}"
             "<div style='font-size:28px;font-weight:700;color:#1a1a1a;"
-            "font-family:Poppins,sans-serif;text-align:center;margin-bottom:4px'>Bienvenido</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
+            "font-family:Poppins,sans-serif;text-align:center;margin-bottom:4px'>Bienvenido</div>"
             "<div style='font-size:15px;color:#999;font-family:Poppins,sans-serif;"
-            "text-align:center;margin-bottom:20px'>Ingresa la contraseña de acceso</div>",
+            "text-align:center;margin-bottom:20px'>Ingresa la contraseña de acceso</div>"
+            "<hr style='border:none;border-top:1px solid #e8e4dc;margin-bottom:0'>"
+            "</div>",
             unsafe_allow_html=True,
         )
-        st.markdown(
-            "<hr style='border:none;border-top:1px solid #e8e4dc;margin-bottom:20px'>",
-            unsafe_allow_html=True,
-        )
+
         pwd = st.text_input("Contraseña", type="password", key="login_pwd",
                             placeholder="Contraseña del sistema",
                             label_visibility="collapsed")
@@ -441,7 +470,6 @@ def page_login():
             "Sistema interno Colsports · acceso restringido</span></div>",
             unsafe_allow_html=True,
         )
-        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
