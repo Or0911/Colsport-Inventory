@@ -28,7 +28,7 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 | Validación | Pydantic v2 |
 | Deploy | Streamlit Community Cloud |
 | Fuente tipográfica | Google Fonts — Poppins (sans-serif) |
-| Assets estáticos | `assets/logo.png` (logo Colsports, con fallback a texto si no existe) |
+| Assets estáticos | `assets/logo.png` — logo Colsports horizontal (PNG con fondo transparente ideal). Fallback a texto "COLSPORTS" si no existe. Se muestra en login (220px) y sidebar (150px). |
 | Estilos | CSS custom con variables `--cs-*` inyectadas desde dict `THEME` |
 
 ---
@@ -218,7 +218,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ---
 
-## 11. Estado actual (2026-05-02)
+## 11. Estado actual (2026-05-05)
 
 ### ✅ Funcionando en producción (main)
 - Login con contraseña
@@ -282,7 +282,7 @@ Nuevas funciones helper en `streamlit_app.py`:
 - `_render_sale_detail(detalle)` → renderiza el dict de detalle de venta; compartido entre Dashboard y página Ventas.
 - `_render_purchase_detail(detalle)` → renderiza el dict de detalle de compra; usado en el historial de Compras.
 
-### 🔀 Rama `rappisync` (en desarrollo)
+### 🔀 Rama `rappisync` (lista para merge)
 
 Funcionalidad de sincronización automática de disponibilidad con Rappi:
 
