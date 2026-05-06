@@ -343,6 +343,7 @@ def init_session():
         "parsed_sale": None,
         "sale_montos": None,
         "last_venta_id": None,
+        "sale_parse_v": 0,   # increments each time a new sale is parsed → resets the items editor
         "sv_detalle_edit": None,
         "sv_editing_id": None,
         "ep_detalle_edit": None,
@@ -360,6 +361,7 @@ CANAL_COLORS = {
     "Local":       "#3498db",
     "TikTok Live": "#010101",
     "Instagram":   "#C13584",
+    "Página Web":  "#e67e22",
 }
 
 
@@ -587,10 +589,12 @@ def page_new_sale(engine):
                         st.session_state.sale_montos = montos
                         st.session_state.sale_saved = False
                         st.session_state.last_venta_id = None
+                        # Increment to reset the items editor for the new parsed sale
+                        st.session_state["sale_parse_v"] = st.session_state.get("sale_parse_v", 0) + 1
                     except Exception as e:
                         st.error(f"Error al parsear: {e}")
 
-    # ── Right column: preview ──
+    # ── Right column: editable preview ──
     with col_right:
 
         if st.session_state.get("sale_saved") and st.session_state.get("last_venta_id"):
@@ -604,7 +608,6 @@ def page_new_sale(engine):
             return
 
         venta = st.session_state.get("parsed_sale")
-        montos = st.session_state.get("sale_montos")
 
         if venta is None:
             st.markdown(
@@ -618,68 +621,143 @@ def page_new_sale(engine):
             )
             return
 
-        st.markdown('<div class="cs-card">', unsafe_allow_html=True)
+        parse_v = st.session_state.get("sale_parse_v", 0)
 
-        # Canal badge
-        canal_color = CANAL_COLORS.get(venta.canal, "#555")
+        # ── Canal (editable) ──
+        all_canales = list(CANAL_COLORS.keys())
+        if venta.canal not in all_canales:
+            all_canales = [venta.canal] + all_canales
+        edited_canal = st.selectbox(
+            "Canal",
+            all_canales,
+            index=all_canales.index(venta.canal),
+            key=f"nv_canal_{parse_v}",
+        )
+        canal_color = CANAL_COLORS.get(edited_canal, "#555")
         st.markdown(
-            f'<span class="badge" style="color:{canal_color};border-color:{canal_color}">'
-            f'{venta.canal}</span>',
+            f'<span class="badge" style="color:{canal_color};border-color:{canal_color};'
+            f'margin-bottom:4px">{edited_canal}</span>',
             unsafe_allow_html=True,
         )
 
-        # Cliente
-        if venta.cliente:
+        # ── Cliente (editable) ──
+        with st.expander("👤 Cliente", expanded=bool(venta.cliente)):
             c = venta.cliente
-            with st.expander("👤 Cliente", expanded=True):
-                cols = st.columns(2)
-                if c.nombre:   cols[0].markdown(f"**Nombre:** {c.nombre}")
-                if c.cedula:   cols[1].markdown(f"**CC:** {c.cedula}")
-                if c.telefono: cols[0].markdown(f"**Tel:** {c.telefono}")
-                if c.email:    cols[1].markdown(f"**Email:** {c.email}")
+            cli_c1, cli_c2 = st.columns(2)
+            c_nombre = cli_c1.text_input("Nombre", value=c.nombre if c else "",
+                                          key=f"nv_c_nom_{parse_v}")
+            c_cedula = cli_c2.text_input("CC", value=(c.cedula or "") if c else "",
+                                          key=f"nv_c_cc_{parse_v}")
+            c_tel = cli_c1.text_input("Teléfono", value=(c.telefono or "") if c else "",
+                                       key=f"nv_c_tel_{parse_v}")
+            c_email = cli_c2.text_input("Email", value=(c.email or "") if c else "",
+                                         key=f"nv_c_email_{parse_v}")
 
-        # Productos
+        # ── Productos (editable con SKU matching) ──
         st.markdown(
-            "<div style='font-size:14px;font-weight:600;color:#555;"
-            "font-family:Poppins,sans-serif;margin-bottom:6px'>🛒 Productos</div>",
+            "<div style='font-size:13px;font-weight:600;color:#555;"
+            "font-family:Poppins,sans-serif;margin:6px 0 2px'>🛒 Productos</div>",
             unsafe_allow_html=True,
         )
-        for item in venta.items:
-            precio = fmt_cop(item.precio_unitario) if item.precio_unitario else "—"
-            st.markdown(
-                f"<div style='background:#f5f2eb;border:1.5px solid #e0ddd8;border-radius:2px;"
-                f"padding:7px 12px;margin:3px 0;font-size:14px;font-family:Poppins,sans-serif'>"
-                f"<b>{item.cantidad}×</b> {item.producto_nombre_raw} "
-                f"<span style='float:right;color:#1a1a1a;font-weight:700'>{precio}</span></div>",
-                unsafe_allow_html=True,
-            )
-
-        # Totals
         st.markdown(
-            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:12px 0'>",
+            "<div style='font-size:12px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:6px'>"
+            "Edita SKU, cantidad o precio antes de confirmar. Solo descuenta stock a los ítems con SKU.</div>",
+            unsafe_allow_html=True,
+        )
+
+        import pandas as _pd_nv
+        from api.guardar_venta import _match_sku as _nv_match
+        from sqlalchemy.orm import Session as _NVSess
+        from models import Producto as _NVProd
+        from sqlalchemy import select as _nv_sel
+
+        catalogo_nv = get_sku_catalog(engine)
+        skus_nv = [""] + [f"{p['sku']} — {p['nombre']}" for p in catalogo_nv]
+        sku_map_nv = {"": None}
+        for p in catalogo_nv:
+            sku_map_nv[f"{p['sku']} — {p['nombre']}"] = p["sku"]
+        sku_display_nv = {p["sku"]: f"{p['sku']} — {p['nombre']}" for p in catalogo_nv}
+
+        with _NVSess(engine) as _nv_s:
+            _nv_catalog = _nv_s.execute(_nv_sel(_NVProd)).scalars().all()
+
+        rows_nv = []
+        for item in venta.items:
+            sku_sug = _nv_match(_nv_catalog, item.producto_nombre_raw)
+            rows_nv.append({
+                "Producto": item.producto_nombre_raw,
+                "SKU": sku_display_nv.get(sku_sug, "") if sku_sug else "",
+                "Cantidad": item.cantidad,
+                "Precio unit. (COP)": item.precio_unitario,
+            })
+
+        df_nv_result = st.data_editor(
+            _pd_nv.DataFrame(rows_nv) if rows_nv else _pd_nv.DataFrame(
+                columns=["Producto", "SKU", "Cantidad", "Precio unit. (COP)"]
+            ),
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key=f"nv_editor_{parse_v}",
+            column_config={
+                "Producto": st.column_config.TextColumn("Producto", width="large"),
+                "SKU": st.column_config.SelectboxColumn("SKU en catálogo", options=skus_nv, width="large"),
+                "Cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1, width="small"),
+                "Precio unit. (COP)": st.column_config.NumberColumn(
+                    "Precio unit. (COP)", min_value=0, step=1000, format="$ %d", width="medium"
+                ),
+            },
+        )
+
+        # ── Totales (calculados en tiempo real) ──
+        try:
+            nv_sub = int(
+                (df_nv_result["Cantidad"].fillna(1) * df_nv_result["Precio unit. (COP)"].fillna(0)).sum()
+            )
+        except Exception:
+            nv_sub = st.session_state.get("sale_montos", {}).get("subtotal", 0) or 0
+        nv_env = venta.costo_envio or 0
+        nv_com_pct = venta.rappi_detalle.comision_porcentaje if venta.rappi_detalle else 0
+        nv_com = round(nv_sub * nv_com_pct / 100) if nv_com_pct else 0
+        nv_total = nv_sub + nv_env - nv_com
+
+        st.markdown(
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:8px 0'>",
             unsafe_allow_html=True,
         )
         mc1, mc2, mc3 = st.columns(3)
-        mc1.metric("Bruto", fmt_cop(montos["subtotal"]))
-        if montos["costo_envio"]:
-            mc2.metric("Envío", fmt_cop(montos["costo_envio"]))
-        if montos["comision_monto"]:
-            pct = venta.rappi_detalle.comision_porcentaje if venta.rappi_detalle else 0
-            mc2.metric("Comisión", fmt_cop(montos["comision_monto"]),
-                       delta=f"-{pct:.0f}%", delta_color="inverse")
-        mc3.metric("**Neto**", fmt_cop(montos["total"]))
+        mc1.metric("Bruto", fmt_cop(nv_sub))
+        if nv_env:
+            mc2.metric("Envío", fmt_cop(nv_env))
+        if nv_com:
+            mc2.metric("Comisión", fmt_cop(nv_com),
+                       delta=f"-{nv_com_pct:.0f}%", delta_color="inverse")
+        mc3.metric("Total", fmt_cop(nv_total))
 
-        # Payment
-        pago_str = venta.pago.metodo
-        if venta.pago.cuenta_destino:
-            pago_str += f" › {venta.pago.cuenta_destino}"
+        # ── Pago (editable) ──
         st.markdown(
-            f"<div style='font-size:14px;color:#555;font-family:Poppins,sans-serif;margin-top:4px'>"
-            f"💳 <b>Pago:</b> {pago_str}</div>",
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:8px 0'>",
             unsafe_allow_html=True,
         )
+        _pago_opts = [
+            "Sin especificar", "Transferencia Bancolombia", "Nequi", "Efectivo",
+            "Pago contraentrega", "Contra entrega Rappi", "Tarjeta de crédito",
+        ]
+        _cur_pago = venta.pago.metodo or "Sin especificar"
+        if _cur_pago not in _pago_opts:
+            _pago_opts = [_cur_pago] + _pago_opts
+        p_c1, p_c2 = st.columns(2)
+        e_pago = p_c1.selectbox(
+            "💳 Método de pago", _pago_opts,
+            index=_pago_opts.index(_cur_pago),
+            key=f"nv_pago_{parse_v}",
+        )
+        e_cuenta = p_c2.text_input(
+            "Cuenta destino", value=venta.pago.cuenta_destino or "",
+            key=f"nv_cuenta_{parse_v}",
+        )
 
-        # Shipping
+        # ── Dirección (solo lectura) ──
         if venta.envio and (venta.envio.ciudad or venta.envio.direccion):
             with st.expander("📦 Dirección de envío"):
                 e = venta.envio
@@ -687,69 +765,142 @@ def page_new_sale(engine):
                 if e.ciudad:       st.text(f"Ciudad    : {e.ciudad}")
                 if e.departamento: st.text(f"Dpto      : {e.departamento}")
 
-        if venta.notas:
-            st.info(f"📝 {venta.notas}")
         if venta.fuente_referido:
             st.markdown(
-                f"<div style='font-size:14px;color:#777;font-family:Poppins,sans-serif'>"
+                f"<div style='font-size:13px;color:#777;font-family:Poppins,sans-serif;margin-top:2px'>"
                 f"📣 <b>Referido:</b> {venta.fuente_referido}</div>",
                 unsafe_allow_html=True,
             )
 
+        # ── Notas (editable) ──
+        e_notas = st.text_area(
+            "Notas", value=venta.notas or "",
+            key=f"nv_notas_{parse_v}",
+            height=60,
+            placeholder="Observaciones, correcciones…",
+            label_visibility="collapsed",
+        )
+
         st.markdown(
-            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:12px 0'>",
+            "<hr style='border:none;border-top:1px solid #e0ddd8;margin:8px 0'>",
             unsafe_allow_html=True,
         )
 
-        # Confirm / cancel buttons
+        # ── Confirmar / Cancelar ──
         b1, b2 = st.columns([3, 1])
         with b1:
             if st.button("✅ Confirmar y Guardar", type="primary",
                          use_container_width=True, key="btn_guardar"):
                 msg = st.session_state.get(sale_key, "")
-                with st.spinner("Guardando en base de datos..."):
+
+                # Build items list from the editor
+                pre_items = []
+                for _, row in df_nv_result.iterrows():
+                    nombre = str(row.get("Producto") or "").strip()
+                    if not nombre:
+                        continue
+                    qty = row.get("Cantidad")
+                    precio = row.get("Precio unit. (COP)")
                     try:
-                        from sqlalchemy.orm import Session as DBSession
-                        from api.guardar_venta import save_sale, DuplicateRappiOrderError
-                        with DBSession(engine) as session:
-                            v_guardada = save_sale(session, venta, msg)
-                            session.commit()
-                            venta_id = v_guardada.id
+                        qty = int(qty) if qty is not None and not _pd_nv.isna(qty) else 1
+                        precio = int(precio) if precio is not None and not _pd_nv.isna(precio) else 0
+                    except (ValueError, TypeError):
+                        qty, precio = 1, 0
+                    if qty <= 0:
+                        continue
+                    sku_val = sku_map_nv.get(str(row.get("SKU") or "").strip(), None)
+                    pre_items.append({
+                        "nombre_raw": nombre, "sku": sku_val,
+                        "cantidad": qty, "precio_unitario": precio,
+                    })
 
-                        st.session_state.sale_saved = True
-                        st.session_state.last_venta_id = venta_id
-                        st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
+                if not pre_items:
+                    st.warning("Debe haber al menos un producto con nombre válido.")
+                else:
+                    # Reconstruct ParsedSale with all edits applied
+                    from api.motor_ia import (
+                        ParsedSale as _PS, SaleItemData as _SID,
+                        CustomerData as _CD, PaymentData as _PD,
+                    )
 
-                        get_ventas_por_canal.clear()
-                        get_tendencia_diaria.clear()
-                        get_top_productos.clear()
-                        get_top_facturadores.clear()
-                        get_ventas_recientes.clear()
-                        get_alertas_stock.clear()
-                        get_pedidos_sin_stock.clear()
-                        get_combos_stock_virtual.clear()
-                        get_alertas_pedido.clear()
-                        get_kpis.clear()
-                        get_kpis_period.clear()
-
-                        st.rerun()
-                    except DuplicateRappiOrderError as e:
-                        st.warning(
-                            f"⚠️ **Orden Rappi duplicada — no se guardó.**\n\n"
-                            f"La orden **{e.order_id}** ya fue registrada anteriormente. "
-                            f"El stock **no fue descontado**. "
-                            f"Si la orden es nueva, verifica el Order ID antes de continuar."
+                    edited_cliente = None
+                    if c_nombre.strip():
+                        edited_cliente = _CD(
+                            nombre=c_nombre,
+                            cedula=c_cedula or None,
+                            telefono=c_tel or None,
+                            email=c_email or None,
                         )
-                    except Exception as e:
-                        st.error(f"Error al guardar: {e}")
+
+                    # SaleItemData with pre-resolved sku → _create_sale_items skips re-matching
+                    edited_items_ps = [
+                        _SID(
+                            producto_nombre_raw=it["nombre_raw"],
+                            cantidad=it["cantidad"],
+                            precio_unitario=it["precio_unitario"] or None,
+                            sku=it["sku"],
+                        )
+                        for it in pre_items
+                    ]
+
+                    edited_sale = _PS(
+                        canal=edited_canal,
+                        cliente=edited_cliente,
+                        items=edited_items_ps,
+                        costo_envio=venta.costo_envio,
+                        total_declarado=venta.total_declarado,
+                        pago=_PD(
+                            metodo=e_pago,
+                            cuenta_destino=e_cuenta or None,
+                            referencia=venta.pago.referencia,
+                        ),
+                        envio=venta.envio,
+                        rappi_detalle=venta.rappi_detalle,
+                        fuente_referido=venta.fuente_referido,
+                        notas=e_notas or None,
+                    )
+
+                    with st.spinner("Guardando en base de datos..."):
+                        try:
+                            from sqlalchemy.orm import Session as DBSession
+                            from api.guardar_venta import save_sale, DuplicateRappiOrderError
+                            with DBSession(engine) as session:
+                                v_guardada = save_sale(session, edited_sale, msg)
+                                session.commit()
+                                venta_id = v_guardada.id
+
+                            st.session_state.sale_saved = True
+                            st.session_state.last_venta_id = venta_id
+                            st.session_state["sale_msg_v"] = st.session_state["sale_msg_v"] + 1
+
+                            get_ventas_por_canal.clear()
+                            get_tendencia_diaria.clear()
+                            get_top_productos.clear()
+                            get_top_facturadores.clear()
+                            get_ventas_recientes.clear()
+                            get_alertas_stock.clear()
+                            get_pedidos_sin_stock.clear()
+                            get_combos_stock_virtual.clear()
+                            get_alertas_pedido.clear()
+                            get_kpis.clear()
+                            get_kpis_period.clear()
+
+                            st.rerun()
+                        except DuplicateRappiOrderError as e:
+                            st.warning(
+                                f"⚠️ **Orden Rappi duplicada — no se guardó.**\n\n"
+                                f"La orden **{e.order_id}** ya fue registrada anteriormente. "
+                                f"El stock **no fue descontado**. "
+                                f"Si la orden es nueva, verifica el Order ID antes de continuar."
+                            )
+                        except Exception as e:
+                            st.error(f"Error al guardar: {e}")
         with b2:
             if st.button("❌", use_container_width=True, key="btn_cancelar",
                          help="Cancelar"):
                 st.session_state.parsed_sale = None
                 st.session_state.sale_montos = None
                 st.rerun()
-
-        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------

@@ -75,6 +75,8 @@ REGLAS DE EXTRACCIÓN:
 
 3. PRODUCTOS: Extrae cada referencia como un item separado.
    - Incluye presentación, sabor o variante si aparece (ej: "Proteína X 5lb vainilla").
+   - CRÍTICO: Extrae el nombre EXACTAMENTE como aparece en el texto. NO expandas abreviaturas
+     ni añadas palabras ausentes. "creatina in 60 serv" → producto_nombre_raw="creatina in 60 serv".
 
 4. CANTIDADES: Número de unidades que llegan al inventario.
    - "12 und" → cantidad=12
