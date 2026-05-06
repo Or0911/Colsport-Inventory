@@ -191,7 +191,8 @@ def _create_sale_items(
     matched_items: list[tuple[str, int]] = []
 
     for item_data in parsed_sale.items:
-        sku = _match_sku(catalog, item_data.producto_nombre_raw)
+        # Use pre-resolved SKU from the UI editor if provided; fall back to catalog matching.
+        sku = item_data.sku if item_data.sku else _match_sku(catalog, item_data.producto_nombre_raw)
         item_subtotal = (item_data.precio_unitario or 0) * item_data.cantidad
 
         item = VentaItem(

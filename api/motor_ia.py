@@ -49,6 +49,10 @@ class SaleItemData(BaseModel):
         default=None,
         description="Unit price in COP (integer). None if not explicitly listed per product."
     )
+    sku: Optional[str] = Field(
+        default=None,
+        description="Internal SKU — set by the UI after catalog matching, never by the LLM."
+    )
 
 
 class ShippingData(BaseModel):
@@ -195,6 +199,7 @@ CANALES VÁLIDOS:
 - "Local"       → mensaje empieza con "VENTA LOCAL"
 - "TikTok Live" → mensaje empieza con "VENTA LIVE TIK TOK" o similar
 - "Instagram"   → mensaje empieza con "VENTA INSTAGRAM"
+- "Página Web"  → mensaje empieza con "VENTA PÁGINA WEB" o "VENTA PAGINA WEB" o similar
 
 REGLAS DE EXTRACCIÓN:
 
@@ -213,6 +218,10 @@ REGLAS DE EXTRACCIÓN:
    - Si el precio no aparece junto al producto → precio_unitario=null
    - Si hay un total general sin desglose por item → precio_unitario=null en todos los items
    - "1 par Mancuernas 5kg" → producto_nombre_raw="Mancuerna 5kg x2", cantidad=1
+   - CRÍTICO: Extrae el nombre del producto EXACTAMENTE como aparece en el texto. NO expandas
+     abreviaturas ni añadas palabras que no están en el mensaje. Ejemplos:
+     "bi pro sachet" → producto_nombre_raw="bi pro sachet" (NO "bi pro complex sachet")
+     "creatina in 60 serv" → producto_nombre_raw="creatina in 60 serv" (NO expandir "IN")
 
 4. CLIENTE: En ventas locales puede haber solo el nombre. Crea objeto cliente solo con nombre.
    Si no hay ningún dato de cliente, cliente=null.
