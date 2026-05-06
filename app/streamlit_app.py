@@ -793,12 +793,22 @@ def page_new_sale(engine):
                          use_container_width=True, key="btn_guardar"):
                 msg = st.session_state.get(sale_key, "")
 
-                # Build items list from the editor
+                # Build items list from the editor — defensive against None/NaN/pd.NA
                 pre_items = []
                 for _, row in df_nv_result.iterrows():
-                    nombre = str(row.get("Producto") or "").strip()
+                    # Nombre: skip empty or all-None rows (e.g. phantom rows from data_editor)
+                    try:
+                        nombre_raw = row.get("Producto")
+                        nombre = (
+                            str(nombre_raw).strip()
+                            if nombre_raw is not None and not _pd_nv.isna(nombre_raw)
+                            else ""
+                        )
+                    except (TypeError, ValueError):
+                        nombre = ""
                     if not nombre:
                         continue
+
                     qty = row.get("Cantidad")
                     precio = row.get("Precio unit. (COP)")
                     try:
@@ -808,7 +818,18 @@ def page_new_sale(engine):
                         qty, precio = 1, 0
                     if qty <= 0:
                         continue
-                    sku_val = sku_map_nv.get(str(row.get("SKU") or "").strip(), None)
+
+                    try:
+                        sku_raw = row.get("SKU")
+                        sku_str = (
+                            str(sku_raw).strip()
+                            if sku_raw is not None and not _pd_nv.isna(sku_raw)
+                            else ""
+                        )
+                    except (TypeError, ValueError):
+                        sku_str = ""
+                    sku_val = sku_map_nv.get(sku_str, None)
+
                     pre_items.append({
                         "nombre_raw": nombre, "sku": sku_val,
                         "cantidad": qty, "precio_unitario": precio,
