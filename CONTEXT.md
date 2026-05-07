@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-06 (v1.2-stable).
+> Actualizado el 2026-05-07 (v1.3-stable).
 
 ---
 
@@ -200,13 +200,18 @@ Invalidar caches + st.rerun()
 
 ## 8. SKU matching (F1-score)
 
-`_match_sku()` en `guardar_venta.py`:
+`_match_sku()` en `guardar_venta.py`. Es la única función de matching — se importa en `streamlit_app.py` para la pre-sugerencia tanto en el editor de **Nueva Venta** como en el de **Nueva Compra**. `guardar_compra.py` no hace matching propio: guarda el SKU que el usuario confirmó en el editor.
 
+**Algoritmo:**
 1. Tokeniza el nombre raw del mensaje (separa dígitos/letras, stemming básico `s` final).
 2. Para cada producto del catálogo calcula F1 entre keywords del mensaje y tokens del nombre.
-3. Umbral mínimo de recall: 60%. Devuelve el mejor SKU o `None`.
-4. Si el producto ya trae `SaleItemData.sku` (asignado en el editor de la UI), se usa directamente y se omite el matching. Esto permite que el usuario corrija el SKU antes de guardar.
-5. Stock negativo en productos normales es **intencional**: indica venta sin stock previo.
+3. **Siempre** evalúa también cada entrada del campo `alias` (comma-separated) y toma el score más alto entre nombre y aliases. El score de alias reemplaza al de nombre si es mayor.
+4. Umbral mínimo de recall: 60%. Devuelve el mejor SKU o `None`.
+5. Si el producto ya trae `SaleItemData.sku` (asignado en el editor de la UI), se usa directamente y se omite el matching. Esto permite que el usuario corrija el SKU antes de guardar.
+6. Stock negativo en productos normales es **intencional**: indica venta sin stock previo.
+
+**Por qué los aliases siempre compiten (no solo como fallback):**  
+El F1 penaliza nombres largos: un producto con muchos tokens en su nombre tiene precisión baja aunque todos los keywords encajen, y puede perder contra un producto de nombre corto cuya coincidencia parcial da mayor F1. Ejemplo: "Megaplex 2 lb" matcheaba a "Viga 2lb - Fitmafia" (3 tokens, F1=0.67) en lugar de "Megaplex Creatine Power 2lb - Nutramerican Pharma - Vainilla" (8 tokens, F1=0.54), a pesar de tener alias exacto "Megaplex 2 lb" (F1=1.0). Antes, el alias solo se revisaba si el nombre daba 0 — ahora siempre compite.
 
 **Causas conocidas de error en el matching:**
 - **Falsos positivos**: combos con texto ambiguo hacen que el modelo incluya productos no pedidos.
@@ -276,7 +281,7 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ---
 
-## 12. Estado actual (2026-05-06)
+## 12. Estado actual (2026-05-07)
 
 ### ✅ Rama `main` — en producción
 - Login con contraseña
@@ -302,6 +307,11 @@ Implementada sobre `main`. Commits:
 2. **`ea24b8b`** — Robustez data_editor contra None/NaN/pd.NA:
    - Extractor de filas envuelve `nombre` y `SKU` en `try/except` con `isna()` explícito.
    - Filas fantasma del `data_editor` (celdas `pandas.NA`) se filtran sin lanzar `TypeError`.
+
+3. **`9b54459`** — Fix aliases en `_match_sku`: siempre compiten, no solo como fallback:
+   - El alias ya no se evalúa únicamente cuando `nombre_score == 0`. Ahora el alias siempre compite y reemplaza el score del nombre si es mayor.
+   - Soluciona el caso de nombres de catálogo largos (muchos tokens → baja precisión → pierden contra productos de nombre corto con match parcial). Caso concreto: "Megaplex 2 lb" → alias F1=1.0 gana sobre "Viga 2lb" F1=0.67.
+   - Aplica a ventas y compras (ambos flujos importan `_match_sku` de `guardar_venta.py`).
 
 ### 🔀 Rama `rappisync` (en main a través de merges anteriores)
 Sincronización automática de disponibilidad con Rappi. Ver sección 13.
@@ -423,3 +433,4 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 | `SaleItemData.sku` es asignado por la UI, nunca por el LLM | El LLM extrae `producto_nombre_raw`; el SKU se resuelve por F1-score o selección manual en el editor. Al viajar en el mismo objeto Pydantic, `_create_sale_items` puede saltarse el re-matching sin cambiar la firma de `save_sale` |
 | `sale_parse_v` para resetear el data_editor de nueva venta | El `data_editor` de Streamlit mantiene estado por `key`. Usar un contador que se incrementa con cada parseo garantiza que el editor se inicializa con los ítems nuevos sin depender de `sale_msg_v` (que controla el textarea) |
 | data_editor: extractor de filas con doble guard (isna + try/except) | `pandas.NA` en celdas vacías lanza `TypeError` en `pd.NA or ""`. El extractor usa `isna()` explícito antes de `str()` y envuelve en `try/except (TypeError, ValueError)` para tolerar cualquier tipo devuelto por Streamlit |
+| Aliases siempre compiten en `_match_sku`, no solo como fallback | Un nombre de catálogo largo (muchos tokens) tiene baja precisión F1 y puede perder contra un producto de nombre corto con match parcial. El alias "Megaplex 2 lb" (3 tokens, F1=1.0) perdía contra "Viga 2lb" (F1=0.67) porque el alias solo se evaluaba si `nombre_score == 0`. Ahora el alias siempre compite y reemplaza si es mejor. |
