@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-07 (v1.2-stable, rama product-search-and-admin).
+> Actualizado el 2026-05-07 (v1.3-stable, rama main).
 
 ---
 
@@ -284,36 +284,29 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ## 12. Estado actual (2026-05-07)
 
-### ✅ Rama `main` — en producción
+### ✅ Rama `main` — en producción (estado completo)
+
 - Login con contraseña
-- Registro de ventas (todos los canales), descuento de stock automático
-- Cálculo de comisiones Rappi
+- Registro de ventas (todos los canales), descuento de stock automático; editor de ítems con SKU pre-sugerido
+- Cálculo de comisiones Rappi; detección de orden duplicada (`DuplicateRappiOrderError`)
 - Compras de proveedor con parser IA + data_editor revisable
 - Stock sumado al confirmar compra
 - Dashboard: KPIs del período, tendencia ventas/compras, donut canal, top 5 productos, dinero por cuenta
-- Inventario: alertas stock negativo, combos con stock virtual
-- Sistema de estilos Poppins + tema marrón/canvas configurable
-- Gestión de aliases por producto (en DB, no en UI)
+- Inventario: catálogo, alertas stock negativo/bajo, combos con stock virtual, hot products
+- **Ajuste manual de stock** (tab en Inventario): selección de producto, unidades a ajustar, motivo, resumen con nombre + delta + stock resultante, confirmación escribiendo "CONFIRMAR". Usa `adjust_stock_with_log()` → UPDATE atómico + INSERT en `stock_adjustment_log`.
+- **Búsqueda por producto** (página `busqueda`): filtro de catálogo → selectbox → tabla unificada de ventas y compras del producto, ordenada por fecha.
+- **Página Admin / Logs**: tab "Correcciones de SKU" (`sku_match_log`) + tab "Ajustes de Stock" (`stock_adjustment_log`).
+- **SKU correction logging en ventas y compras**: al confirmar, si el SKU confirmado difiere del sugerido por la IA, se inserta en `sku_match_log` con tipo `"venta"` o `"compra"`. Fire-and-forget.
+- Sistema de aliases para matching; gestión vía SQL directo.
+- Sistema de estilos Poppins + tema marrón/canvas configurable por env vars.
+- Rappi sync: apaga/enciende disponibilidad según stock.
 
-### 🔀 Rama `product-search-and-admin` (lista para merge)
-Implementada sobre `main`. Commit `365fd97`:
+### Ramas locales activas
+- `main` — rama principal
+- `Promt_Refinement` — elimina CSVs de datos históricos del repo; sin impacto en el código de la app
+- `update_inventory` — agrega script de migración de alias y ajustes en guardar_venta (supersedido por implementación actual)
 
-- **Elimina página Catálogo/Aliases**: la UI de aliases se removió; los aliases siguen en la DB y el matcher los sigue usando. Gestión de aliases queda en manos del operador vía SQL.
-- **Búsqueda por producto** (página `busqueda`): filtro de catálogo → selectbox → tabla unificada de ventas y compras del producto, con stock actual, ordenada por fecha.
-- **Ajuste de Stock** (tab en Inventario): filtro, selectbox, campo delta +/-, motivo, previsualización, confirmación escribiendo "CONFIRMAR". Usa `adjust_stock_with_log()` → UPDATE atómico + INSERT en `stock_adjustment_log`.
-- **Página Admin / Logs**: tab "Correcciones de SKU" (`sku_match_log`) y tab "Ajustes de Stock" (`stock_adjustment_log`), ambos con refresh manual.
-- **SKU correction logging en compras**: al confirmar una compra, si el SKU confirmado difiere del sugerido, se inserta en `sku_match_log`. Logging es fire-and-forget: un fallo no bloquea el guardado.
-- Nuevos modelos: `SkuMatchLog`, `StockAdjustmentLog`. Migración: `python scripts/add_log_tables.py`.
-
-### 🔀 Rama `rappisync` (en main a través de merges anteriores)
-Sincronización automática de disponibilidad con Rappi. Ver sección 13.
-
-### 🔀 Rama `CombosManage` (pendiente de merge)
-- Mejora de `_match_sku`: también busca en campo `alias` por producto (ya implementado en main vía commits anteriores).
-- Requiere migración si no se ha corrido: `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;`
-
-### 🔀 Rama `updates` (pendiente de merge)
-Mejoras de UI y visor de venta completa. Validar antes de mergear.
+> Las ramas mergeadas anteriores (product-search-and-admin, opt-sale-edit-and-fixes, rappisync, purchase-edit-and-fixes, updates, CombosManage, etc.) fueron eliminadas en v1.3.
 
 ---
 
@@ -352,7 +345,7 @@ INSERT INTO productos (sku, nombre, peso, marca, categoria, stock_actual)
 VALUES ('1999', 'Nombre del Producto', '1kg', 'Marca', 'Categoria', 0);
 ```
 
-### Agregar alias para mejorar el matching (tras merge de CombosManage)
+### Agregar alias para mejorar el matching
 ```sql
 UPDATE productos SET alias = 'Alias1, Alias2, Alias3' WHERE sku = 'XXXX';
 ```
@@ -388,19 +381,26 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 ## 16. Roadmap (próximos pasos)
 
 ### Prioridad alta
-- **Merge `opt-sale-edit-and-fixes` → `main`**: rama lista con editor de venta, canal Página Web y fixes de matching.
-- **Enriquecer aliases del catálogo**: agregar nombres alternativos a productos cuyo matching falla (ej: `bi pro sachet, bi pro saschet` para el sachet de BiPro; variantes por sabor como `creatina creasmart vainilla`). Es la acción más efectiva para reducir errores de matching.
+- **Enriquecer aliases del catálogo**: agregar nombres alternativos a productos cuyo matching falla (ej: `bi pro sachet, bi pro saschet` para el sachet de BiPro; variantes por sabor). Es la acción más efectiva para reducir errores de matching. Ver Admin → Correcciones de SKU para identificar qué aliases agregar.
 
 ### Prioridad media
-- **Ajuste manual de stock desde la app**: página o modal para `stock_actual += X` sin necesidad de crear una compra completa. Útil para correcciones de inventario físico.
-- **Pipeline de evaluación del modelo de matching**: loguear en una tabla `sku_match_log(fecha, texto_ingresado, sku_propuesto, sku_confirmado)`. Con 30-50 correcciones se puede calcular precisión/recall por categoría de producto.
-- **Rappi webhook/polling**: importar órdenes automáticamente sin copiar/pegar.
 - **Exportación Excel/CSV** desde historial de ventas y compras.
+- **Rappi webhook/polling**: importar órdenes automáticamente sin copiar/pegar.
+- **Resumen de cierre diario**: vista rápida con KPIs del día + ventas por canal + dinero en cada cuenta.
 
 ### Prioridad baja
 - **Multi-usuario**: roles admin/vendedor con sesiones separadas.
-- **Resumen de cierre diario**: vista rápida para fin del día.
 - **Fotos de productos**: campo `imagen_url` en catálogo.
+- **Tests unitarios para `_match_sku`**: la lógica F1 ha tenido 2 bugs en producción. 5-10 casos con `pytest` darían confianza ante futuros cambios.
+
+### ✅ Completado (histórico)
+- Editor de ítems en nueva venta con SKU pre-sugerido editable
+- Canal "Página Web"
+- Fix aliases siempre compiten en matching (no solo como fallback)
+- Ajuste manual de stock con log
+- Búsqueda de transacciones por producto
+- Página Admin/Logs (correcciones SKU + ajustes stock)
+- SKU correction logging en compras y ventas
 
 ---
 

@@ -684,8 +684,10 @@ def page_new_sale(engine):
             _nv_catalog = _nv_s.execute(_nv_sel(_NVProd)).scalars().all()
 
         rows_nv = []
+        suggested_skus_nv = {}
         for item in venta.items:
             sku_sug = _nv_match(_nv_catalog, item.producto_nombre_raw)
+            suggested_skus_nv[item.producto_nombre_raw] = sku_sug
             rows_nv.append({
                 "Producto": item.producto_nombre_raw,
                 "SKU": sku_display_nv.get(sku_sug, "") if sku_sug else "",
@@ -891,6 +893,16 @@ def page_new_sale(engine):
                                 v_guardada = save_sale(session, edited_sale, msg)
                                 session.commit()
                                 venta_id = v_guardada.id
+
+                            # Log SKU corrections (suggested ≠ confirmed) — fire-and-forget
+                            from app.db_queries import log_sku_correction as _log_sku_v
+                            for it in pre_items:
+                                _sug = suggested_skus_nv.get(it["nombre_raw"])
+                                if it["sku"] != _sug:
+                                    try:
+                                        _log_sku_v(engine, it["nombre_raw"], _sug, it["sku"], "venta")
+                                    except Exception:
+                                        pass
 
                             st.session_state.sale_saved = True
                             st.session_state.last_venta_id = venta_id
@@ -1491,6 +1503,7 @@ def page_inventory(engine):
             if sku_aj:
                 prod_aj = next((p for p in catalogo_aj if p["sku"] == sku_aj), None)
                 stock_aj = prod_aj.get("stock_actual", 0) if prod_aj else 0
+                nombre_aj = prod_aj.get("nombre", sku_aj) if prod_aj else sku_aj
 
                 st.markdown(
                     f"<div style='font-size:13px;font-family:Poppins,sans-serif;margin:8px 0'>"
@@ -1500,9 +1513,9 @@ def page_inventory(engine):
 
                 aj_c1, aj_c2 = st.columns([1, 2])
                 with aj_c1:
-                    delta_aj = st.number_input("Delta (+/-)", value=0, step=1,
+                    delta_aj = st.number_input("Unidades a ajustar (+/-)", value=0, step=1,
                                                key="aj_delta",
-                                               help="Positivo = sumar. Negativo = restar.")
+                                               help="Positivo = sumar unidades. Negativo = quitar unidades.")
                 with aj_c2:
                     motivo_aj = st.text_input("Motivo (opcional)",
                                               placeholder="Ej: corrección inventario físico",
@@ -1510,14 +1523,25 @@ def page_inventory(engine):
 
                 if delta_aj != 0:
                     nuevo_stock_preview = stock_aj + delta_aj
+                    color_delta = "#3a7a58" if delta_aj > 0 else "#cc4444"
+                    signo = "+" if delta_aj > 0 else "−"
+                    motivo_line = (
+                        f"<div style='margin-top:5px;color:#777'>"
+                        f"Motivo: {motivo_aj.strip()}</div>"
+                        if motivo_aj.strip() else ""
+                    )
                     st.markdown(
                         f"<div style='font-size:13px;font-family:Poppins,sans-serif;"
-                        f"background:#f5f2eb;border:1.5px solid #d4d0c8;border-radius:2px;"
-                        f"padding:10px 14px;margin:10px 0'>"
-                        f"<b>{sku_aj}</b> — stock: "
-                        f"<b>{stock_aj}</b> → <b>{nuevo_stock_preview}</b> "
-                        f"(delta: <span style='color:{'#cc4444' if delta_aj < 0 else '#3a7a58'}'>"
-                        f"{'−' if delta_aj < 0 else '+'}{abs(delta_aj)}</span>)"
+                        f"background:#f5f2eb;border:1.5px solid #d4d0c8;border-radius:6px;"
+                        f"padding:12px 16px;margin:10px 0'>"
+                        f"<div style='font-weight:600;margin-bottom:6px;color:#1a1a1a'>"
+                        f"Resumen del ajuste</div>"
+                        f"<div><b>{sku_aj}</b> — {nombre_aj}</div>"
+                        f"<div style='margin-top:4px'>Stock: <b>{stock_aj}</b> → "
+                        f"<b style='color:{color_delta}'>{nuevo_stock_preview}</b>"
+                        f"&nbsp;&nbsp;<span style='color:{color_delta};font-weight:600'>"
+                        f"({signo}{abs(delta_aj)} unidades)</span></div>"
+                        f"{motivo_line}"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
@@ -1543,10 +1567,8 @@ def page_inventory(engine):
                                 get_inventario.clear()
                                 get_alertas_stock.clear()
                                 get_kpis.clear()
-                                if hasattr(get_stock_adjustment_logs := None, "clear"):
-                                    pass  # cleared on next admin view via button
                                 st.success(
-                                    f"Stock de {sku_aj} ajustado: "
+                                    f"Stock de **{sku_aj}** ajustado: "
                                     f"{stock_aj} → {nuevo_stock}. Registrado en log."
                                 )
                                 st.rerun()

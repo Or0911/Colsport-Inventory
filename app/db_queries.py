@@ -447,35 +447,12 @@ def get_recent_purchases(_engine, limit: int = 20) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def get_sku_catalog(_engine) -> list[dict]:
-    """Returns list of {sku, nombre} to populate the SKU selector in data_editor."""
+    """Returns list of {sku, nombre, stock_actual} to populate SKU selectors."""
     with Session(_engine) as s:
         rows = s.execute(
-            select(Producto.sku, Producto.nombre).order_by(Producto.nombre)
+            select(Producto.sku, Producto.nombre, Producto.stock_actual).order_by(Producto.nombre)
         ).all()
-    return [{"sku": r.sku, "nombre": r.nombre} for r in rows]
-
-
-@st.cache_data(ttl=60)
-def get_catalog_with_aliases(_engine) -> list[dict]:
-    """Returns list of {sku, nombre, alias} for the alias management UI."""
-    with Session(_engine) as s:
-        rows = s.execute(
-            select(Producto.sku, Producto.nombre, Producto.alias).order_by(Producto.nombre)
-        ).all()
-    return [{"sku": r.sku, "nombre": r.nombre, "alias": r.alias or ""} for r in rows]
-
-
-def update_product_alias(engine, sku: str, alias: str) -> None:
-    """Updates the alias field of a product. Empty string clears it."""
-    from sqlalchemy import update as sql_update
-    alias_val = alias.strip() or None
-    with Session(engine) as s:
-        s.execute(
-            sql_update(Producto).where(Producto.sku == sku).values(alias=alias_val)
-        )
-        s.commit()
-    get_catalog_with_aliases.clear()
-    get_sku_catalog.clear()
+    return [{"sku": r.sku, "nombre": r.nombre, "stock_actual": r.stock_actual} for r in rows]
 
 
 # ---------------------------------------------------------------------------
