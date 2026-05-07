@@ -11,6 +11,8 @@ from .combo_componente import ComboComponente
 from .alerta_pedido import AlertaPedido
 from .compra import Compra
 from .detalle_compra import DetalleCompra
+from .sku_match_log import SkuMatchLog
+from .stock_adjustment_log import StockAdjustmentLog
 
 __all__ = [
     "Base",
@@ -27,4 +29,6 @@ __all__ = [
     "AlertaPedido",
     "Compra",
     "DetalleCompra",
+    "SkuMatchLog",
+    "StockAdjustmentLog",
 ]

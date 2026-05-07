@@ -21,6 +21,7 @@ sys.path.insert(0, _root)
 from models import (
     Venta, VentaItem, Producto, Canal, Pago, Cliente, EstadoVenta,
     ComboComponente, AlertaPedido, Compra, DetalleCompra, Envio, RappiDetalle,
+    SkuMatchLog, StockAdjustmentLog,
 )
 
 
@@ -844,6 +845,201 @@ def update_purchase_items(
             )
         )
         s.commit()
+
+
+# ---------------------------------------------------------------------------
+# Product transaction history (sales + purchases for a given SKU)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def get_product_transactions(_engine, sku: str) -> pd.DataFrame:
+    """
+    Returns all sales and purchases that involve a specific SKU, newest first.
+    Columns: Fecha, Tipo, Canal/Proveedor, Cantidad, Precio/Costo unit., Subtotal, Referencia
+    """
+    rows = []
+    with Session(_engine) as s:
+        # Sales
+        sale_rows = s.execute(
+            select(
+                Venta.fecha_creacion,
+                Canal.nombre.label("canal"),
+                VentaItem.cantidad,
+                VentaItem.precio_unitario,
+                VentaItem.subtotal,
+                Venta.id.label("venta_id"),
+                VentaItem.producto_nombre_raw,
+            )
+            .join(VentaItem, VentaItem.venta_id == Venta.id)
+            .join(Canal, Canal.id == Venta.canal_id)
+            .where(VentaItem.sku == sku)
+            .where(Venta.estado != EstadoVenta.cancelada)
+            .order_by(desc(Venta.fecha_creacion))
+        ).all()
+
+        for r in sale_rows:
+            rows.append({
+                "Fecha": r.fecha_creacion,
+                "Tipo": "Venta",
+                "Canal/Proveedor": r.canal,
+                "Cantidad": r.cantidad,
+                "Precio/Costo unit.": r.precio_unitario,
+                "Subtotal": r.subtotal,
+                "Referencia": f"Venta #{r.venta_id}",
+                "Producto raw": r.producto_nombre_raw,
+            })
+
+        # Purchases
+        purchase_rows = s.execute(
+            select(
+                Compra.fecha,
+                Compra.proveedor,
+                DetalleCompra.cantidad,
+                DetalleCompra.precio_costo_unitario,
+                Compra.id.label("compra_id"),
+                DetalleCompra.producto_nombre_raw,
+            )
+            .join(DetalleCompra, DetalleCompra.compra_id == Compra.id)
+            .where(DetalleCompra.producto_sku == sku)
+            .order_by(desc(Compra.fecha))
+        ).all()
+
+        for r in purchase_rows:
+            cost = r.precio_costo_unitario or 0
+            rows.append({
+                "Fecha": r.fecha,
+                "Tipo": "Compra",
+                "Canal/Proveedor": r.proveedor or "—",
+                "Cantidad": r.cantidad,
+                "Precio/Costo unit.": r.precio_costo_unitario,
+                "Subtotal": cost * r.cantidad,
+                "Referencia": f"Compra #{r.compra_id}",
+                "Producto raw": r.producto_nombre_raw,
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=["Fecha", "Tipo", "Canal/Proveedor", "Cantidad",
+                                     "Precio/Costo unit.", "Subtotal", "Referencia", "Producto raw"])
+
+    df = pd.DataFrame(rows)
+    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    return df.sort_values("Fecha", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Stock adjustment with log
+# ---------------------------------------------------------------------------
+
+def adjust_stock_with_log(_engine, sku: str, delta: int, motivo: Optional[str] = None) -> int:
+    """
+    Adjusts stock for a product by delta (positive = add, negative = remove).
+    Inserts a row in stock_adjustment_log.
+    Returns the new stock value.
+    Raises ValueError if SKU not found.
+    """
+    from sqlalchemy import update as sql_update
+
+    with Session(_engine) as s:
+        product = s.execute(select(Producto).where(Producto.sku == sku)).scalar_one_or_none()
+        if product is None:
+            raise ValueError(f"SKU '{sku}' no encontrado en el catálogo.")
+
+        stock_antes = product.stock_actual
+        stock_despues = stock_antes + delta
+
+        s.execute(
+            sql_update(Producto)
+            .where(Producto.sku == sku)
+            .values(stock_actual=stock_despues)
+        )
+
+        s.add(StockAdjustmentLog(
+            sku=sku,
+            producto_nombre=product.nombre,
+            stock_antes=stock_antes,
+            delta=delta,
+            stock_despues=stock_despues,
+            motivo=motivo or None,
+        ))
+        s.commit()
+
+    return stock_despues
+
+
+# ---------------------------------------------------------------------------
+# SKU match correction log
+# ---------------------------------------------------------------------------
+
+def log_sku_correction(_engine, producto_nombre_raw: str,
+                       sku_sugerido: Optional[str], sku_confirmado: Optional[str],
+                       tipo: str = "compra") -> None:
+    """Logs a case where the user changed the suggested SKU to a different one."""
+    with Session(_engine) as s:
+        s.add(SkuMatchLog(
+            producto_nombre_raw=producto_nombre_raw,
+            sku_sugerido=sku_sugerido,
+            sku_confirmado=sku_confirmado,
+            tipo=tipo,
+        ))
+        s.commit()
+
+
+# ---------------------------------------------------------------------------
+# Admin log reads
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def get_sku_match_logs(_engine, limit: int = 200) -> pd.DataFrame:
+    with Session(_engine) as s:
+        rows = s.execute(
+            select(
+                SkuMatchLog.fecha,
+                SkuMatchLog.tipo,
+                SkuMatchLog.producto_nombre_raw,
+                SkuMatchLog.sku_sugerido,
+                Producto.nombre.label("nombre_sugerido"),
+                SkuMatchLog.sku_confirmado,
+            )
+            .outerjoin(Producto, Producto.sku == SkuMatchLog.sku_confirmado)
+            .order_by(desc(SkuMatchLog.fecha))
+            .limit(limit)
+        ).all()
+
+    if not rows:
+        return pd.DataFrame(columns=["Fecha", "Tipo", "Nombre raw", "SKU sugerido",
+                                     "Nombre sugerido", "SKU confirmado"])
+
+    df = pd.DataFrame(rows, columns=["Fecha", "Tipo", "Nombre raw", "SKU sugerido",
+                                     "Nombre sugerido", "SKU confirmado"])
+    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    return df
+
+
+@st.cache_data(ttl=30)
+def get_stock_adjustment_logs(_engine, limit: int = 200) -> pd.DataFrame:
+    with Session(_engine) as s:
+        rows = s.execute(
+            select(
+                StockAdjustmentLog.fecha,
+                StockAdjustmentLog.sku,
+                StockAdjustmentLog.producto_nombre,
+                StockAdjustmentLog.stock_antes,
+                StockAdjustmentLog.delta,
+                StockAdjustmentLog.stock_despues,
+                StockAdjustmentLog.motivo,
+            )
+            .order_by(desc(StockAdjustmentLog.fecha))
+            .limit(limit)
+        ).all()
+
+    if not rows:
+        return pd.DataFrame(columns=["Fecha", "SKU", "Producto", "Stock antes",
+                                     "Delta", "Stock después", "Motivo"])
+
+    df = pd.DataFrame(rows, columns=["Fecha", "SKU", "Producto", "Stock antes",
+                                     "Delta", "Stock después", "Motivo"])
+    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    return df
 
 
 # ---------------------------------------------------------------------------

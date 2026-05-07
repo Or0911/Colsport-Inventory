@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-07 (v1.3-stable).
+> Actualizado el 2026-05-07 (v1.2-stable, rama product-search-and-admin).
 
 ---
 
@@ -144,6 +144,9 @@ data_editor en Streamlit
     │
     ▼ [Confirmar e Ingresar a Inventario]
     │
+    ├─ Por cada item donde SKU confirmado ≠ SKU sugerido:
+    │   └─ INSERT sku_match_log (nombre_raw, sugerido, confirmado, tipo="compra")
+    │
 guardar_compra.save_purchase()
     ├─ INSERT compras
     ├─ Por cada fila con SKU válido:
@@ -200,28 +203,23 @@ Invalidar caches + st.rerun()
 
 ## 8. SKU matching (F1-score)
 
-`_match_sku()` en `guardar_venta.py`. Es la única función de matching — se importa en `streamlit_app.py` para la pre-sugerencia tanto en el editor de **Nueva Venta** como en el de **Nueva Compra**. `guardar_compra.py` no hace matching propio: guarda el SKU que el usuario confirmó en el editor.
+`_match_sku()` en `guardar_venta.py`. Importado en `streamlit_app.py` para pre-sugerir SKU tanto en compras como en ventas (cuando aplique).
 
 **Algoritmo:**
-1. Tokeniza el nombre raw del mensaje (separa dígitos/letras, stemming básico `s` final).
-2. Para cada producto del catálogo calcula F1 entre keywords del mensaje y tokens del nombre.
-3. **Siempre** evalúa también cada entrada del campo `alias` (comma-separated) y toma el score más alto entre nombre y aliases. El score de alias reemplaza al de nombre si es mayor.
+1. Tokeniza el nombre raw (separa dígitos/letras, stemming básico `s` final).
+2. Para cada producto calcula F1 entre keywords del mensaje y tokens del nombre.
+3. Siempre evalúa también cada alias (comma-separated) y toma el score más alto. Los aliases no son fallback — siempre compiten.
 4. Umbral mínimo de recall: 60%. Devuelve el mejor SKU o `None`.
-5. Si el producto ya trae `SaleItemData.sku` (asignado en el editor de la UI), se usa directamente y se omite el matching. Esto permite que el usuario corrija el SKU antes de guardar.
-6. Stock negativo en productos normales es **intencional**: indica venta sin stock previo.
+5. Si el ítem ya trae `SaleItemData.sku` (asignado en el editor UI), lo usa directamente sin re-matching.
 
-**Por qué los aliases siempre compiten (no solo como fallback):**  
-El F1 penaliza nombres largos: un producto con muchos tokens en su nombre tiene precisión baja aunque todos los keywords encajen, y puede perder contra un producto de nombre corto cuya coincidencia parcial da mayor F1. Ejemplo: "Megaplex 2 lb" matcheaba a "Viga 2lb - Fitmafia" (3 tokens, F1=0.67) en lugar de "Megaplex Creatine Power 2lb - Nutramerican Pharma - Vainilla" (8 tokens, F1=0.54), a pesar de tener alias exacto "Megaplex 2 lb" (F1=1.0). Antes, el alias solo se revisaba si el nombre daba 0 — ahora siempre compite.
+**Correcciones de matching se loguean** automáticamente en `sku_match_log` cuando el usuario cambia el SKU sugerido antes de confirmar una compra. Visible en la página Admin / Logs.
 
-**Causas conocidas de error en el matching:**
-- **Falsos positivos**: combos con texto ambiguo hacen que el modelo incluya productos no pedidos.
-- **Variantes no diferenciadas**: si el texto ingresado no especifica el sabor/variante (ej: "Creatina Creasmart 550g" sin "Sin sabor"), el modelo elige la variante más similar que no necesariamente es la correcta. La raíz es la falta de aliases diferenciados por variante en el catálogo.
-- **Marcas compuestas tokenizadas distinto**: "bi pro" (dos tokens) no hace match con "bipro" (un token en el catálogo). Solución: agregar alias `bi pro sachet, bi pro saschet` al producto vía la página Catálogo / Aliases.
-- **Abreviaturas de marca**: nombres como "creatina in 60 serv" donde "IN" es la abreviatura de la marca pueden no matchear si el producto no está en el catálogo o no tiene el alias correcto.
+> **Flujo de mejora:** revisar Admin → Correcciones de SKU → agregar el nombre_raw como alias del producto correcto en la DB con `UPDATE productos SET alias = '...' WHERE sku = 'XXXX'`.
 
-> **Flujo de corrección recomendado:** si el matching falla, corregir el SKU en el `data_editor` antes de confirmar la venta/compra. Para que el sistema aprenda, agregar el nombre alternativo como alias en la página **Catálogo / Aliases**.
-
-> **Campo `alias`:** además del `nombre`, `_match_sku()` revisa un campo `alias` (comma-separated) por producto. Requiere `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;` en la DB si no se hizo aún.
+**Causas conocidas de error:**
+- **Variantes no diferenciadas**: texto sin sabor/variante elige la variante más similar. Solución: aliases diferenciados por variante.
+- **Marcas compuestas**: "bi pro" (dos tokens) vs "bipro" (un token). Solución: alias.
+- **Nombres largos en catálogo**: muchos tokens bajan la precisión F1 → un producto de nombre corto con match parcial puede ganar. Solución: alias corto exacto (ej: "Megaplex 2 lb").
 
 ---
 
@@ -241,6 +239,8 @@ El F1 penaliza nombres largos: un producto con muchos tokens en su nombre tiene 
 | `alertas_pedido` | Componentes de combos vendidos sin stock; campo `resuelta` para seguimiento |
 | `compras` | Cabecera de compra a proveedor |
 | `detalle_compras` | Líneas de compra (sku nullable, nombre_raw, qty, costo_unitario) |
+| `sku_match_log` | Log de correcciones de SKU (nombre_raw, sku_sugerido, sku_confirmado, tipo, fecha) |
+| `stock_adjustment_log` | Log de ajustes manuales de stock (sku, antes, delta, despues, motivo, fecha) |
 
 ---
 
@@ -250,10 +250,11 @@ El F1 penaliza nombres largos: un producto con muchos tokens en su nombre tiene 
 |---|---|---|
 | Nueva Venta | `nueva_venta` | Textarea → parsear → **formulario editable** (canal, cliente, ítems+SKU, pago, notas) → confirmar |
 | Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 5 productos (cards), últimas ventas, dinero por cuenta, visor de venta completa |
-| Inventario | `inventario` | Tabs: Catálogo / Alertas stock (negativos) / Combos / Hot Products |
-| Compras | `compras` | Tabs: Nueva Compra (con data_editor revisable) / Historial (con visor de detalle + edición inline últimas 24h) |
+| Inventario | `inventario` | Tabs: Catálogo / Alertas stock / Combos / Hot Products / **Ajuste Stock** |
+| Compras | `compras` | Tabs: Nueva Compra / Historial (con visor de detalle + edición inline últimas 24h) |
 | Ventas | `ventas` | Historial filtrable + visor de detalle por ID + edición inline (últimas 24h, sin ajuste de stock) |
-| Catálogo / Aliases | `catalogo` | Lista de productos con campo alias editable para mejorar el SKU matching |
+| Búsqueda Producto | `busqueda` | Filtro de catálogo + transacciones unificadas (ventas+compras) por producto, ordenadas por fecha |
+| Admin / Logs | `admin` | Tab Correcciones SKU (`sku_match_log`) + Tab Ajustes de Stock (`stock_adjustment_log`) |
 
 ---
 
@@ -289,29 +290,20 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 - Cálculo de comisiones Rappi
 - Compras de proveedor con parser IA + data_editor revisable
 - Stock sumado al confirmar compra
-- Dashboard: KPIs del período, tendencia ventas/compras, donut canal, top 5 productos (barras solucionadas), dinero por cuenta
+- Dashboard: KPIs del período, tendencia ventas/compras, donut canal, top 5 productos, dinero por cuenta
 - Inventario: alertas stock negativo, combos con stock virtual
 - Sistema de estilos Poppins + tema marrón/canvas configurable
-- Gestión de aliases por producto (página Catálogo / Aliases)
+- Gestión de aliases por producto (en DB, no en UI)
 
-### 🔀 Rama `opt-sale-edit-and-fixes` (lista para merge)
-Implementada sobre `main`. Commits:
+### 🔀 Rama `product-search-and-admin` (lista para merge)
+Implementada sobre `main`. Commit `365fd97`:
 
-1. **`6330db4`** — Editor de ítems en nueva venta + canal Página Web + fixes matching:
-   - **Nueva Venta editable**: la columna derecha reemplaza la previsualización estática por un formulario completamente editable antes de confirmar: selectbox de canal, campos de cliente, `data_editor` de ítems con SKU pre-sugerido, selectbox de pago, notas editables, totales en tiempo real.
-   - **Canal "Página Web"**: añadido a `SYSTEM_PROMPT` de `motor_ia.py`, a `CANAL_COLORS` y al selectbox de canales.
-   - **Fix matching 3a/3b**: `motor_ia.py` y `purchase_parser.py` tienen regla explícita de no expandir abreviaturas ni añadir palabras ausentes en el nombre del producto. `_create_sale_items()` usa `item_data.sku` si ya viene pre-asignado del editor (evita re-matching).
-   - `SaleItemData` tiene nuevo campo opcional `sku: Optional[str] = None` — lo asigna el editor de la UI, nunca el LLM.
-   - `sale_parse_v` en session_state: contador que se incrementa en cada parseo, garantiza que el `data_editor` se resetea al parsear una nueva venta.
-
-2. **`ea24b8b`** — Robustez data_editor contra None/NaN/pd.NA:
-   - Extractor de filas envuelve `nombre` y `SKU` en `try/except` con `isna()` explícito.
-   - Filas fantasma del `data_editor` (celdas `pandas.NA`) se filtran sin lanzar `TypeError`.
-
-3. **`9b54459`** — Fix aliases en `_match_sku`: siempre compiten, no solo como fallback:
-   - El alias ya no se evalúa únicamente cuando `nombre_score == 0`. Ahora el alias siempre compite y reemplaza el score del nombre si es mayor.
-   - Soluciona el caso de nombres de catálogo largos (muchos tokens → baja precisión → pierden contra productos de nombre corto con match parcial). Caso concreto: "Megaplex 2 lb" → alias F1=1.0 gana sobre "Viga 2lb" F1=0.67.
-   - Aplica a ventas y compras (ambos flujos importan `_match_sku` de `guardar_venta.py`).
+- **Elimina página Catálogo/Aliases**: la UI de aliases se removió; los aliases siguen en la DB y el matcher los sigue usando. Gestión de aliases queda en manos del operador vía SQL.
+- **Búsqueda por producto** (página `busqueda`): filtro de catálogo → selectbox → tabla unificada de ventas y compras del producto, con stock actual, ordenada por fecha.
+- **Ajuste de Stock** (tab en Inventario): filtro, selectbox, campo delta +/-, motivo, previsualización, confirmación escribiendo "CONFIRMAR". Usa `adjust_stock_with_log()` → UPDATE atómico + INSERT en `stock_adjustment_log`.
+- **Página Admin / Logs**: tab "Correcciones de SKU" (`sku_match_log`) y tab "Ajustes de Stock" (`stock_adjustment_log`), ambos con refresh manual.
+- **SKU correction logging en compras**: al confirmar una compra, si el SKU confirmado difiere del sugerido, se inserta en `sku_match_log`. Logging es fire-and-forget: un fallo no bloquea el guardado.
+- Nuevos modelos: `SkuMatchLog`, `StockAdjustmentLog`. Migración: `python scripts/add_log_tables.py`.
 
 ### 🔀 Rama `rappisync` (en main a través de merges anteriores)
 Sincronización automática de disponibilidad con Rappi. Ver sección 13.

@@ -499,14 +499,16 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
 
-        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦", "compras": "🛒", "ventas": "📋", "catalogo": "🏷️"}
+        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦",
+                 "compras": "🛒", "ventas": "📋", "busqueda": "🔍", "admin": "⚙️"}
         labels = {
             "nueva_venta": "Nueva Venta",
             "dashboard": "Dashboard",
             "inventario": "Inventario",
             "compras": "Compras",
             "ventas": "Ventas",
-            "catalogo": "Catálogo / Aliases",
+            "busqueda": "Búsqueda Producto",
+            "admin": "Admin / Logs",
         }
         for page, label in labels.items():
             if st.button(f"{icons[page]}  {label}", key=f"nav_{page}",
@@ -1253,8 +1255,8 @@ def page_dashboard(engine):
 def page_inventory(engine):
     st.markdown('<div class="cs-section-title">📦 Inventario y Alertas</div>', unsafe_allow_html=True)
 
-    tab_inv, tab_alertas, tab_combos, tab_hot = st.tabs(
-        ["📋 Catálogo", "🚨 Alertas de stock", "🧩 Combos", "🔥 Hot Products"]
+    tab_inv, tab_alertas, tab_combos, tab_hot, tab_ajuste = st.tabs(
+        ["📋 Catálogo", "🚨 Alertas de stock", "🧩 Combos", "🔥 Hot Products", "⚙️ Ajuste Stock"]
     )
 
     # ── Tab 1: Catálogo ──
@@ -1454,6 +1456,104 @@ def page_inventory(engine):
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+
+    # ── Tab 5: Ajuste de Stock ──
+    with tab_ajuste:
+        from app.db_queries import adjust_stock_with_log
+
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:17px;border-bottom:1px solid #e0ddd8;'
+            'margin-bottom:12px">⚙️ Ajuste manual de stock</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;margin-bottom:16px'>"
+            "Usa este panel para corregir el stock de un producto sin crear una compra. "
+            "Cada ajuste queda registrado en el log de Admin con fecha, producto y motivo.</div>",
+            unsafe_allow_html=True,
+        )
+
+        catalogo_aj = get_sku_catalog(engine)
+        opciones_aj = [f"{p['sku']} — {p['nombre']}" for p in catalogo_aj]
+        sku_map_aj = {f"{p['sku']} — {p['nombre']}": p["sku"] for p in catalogo_aj}
+
+        q_aj = st.text_input("Filtrar producto", placeholder="Nombre o SKU…",
+                             key="aj_filter", label_visibility="collapsed")
+        filtered_aj = [o for o in opciones_aj if q_aj.lower() in o.lower()] if q_aj else opciones_aj
+
+        if not filtered_aj:
+            st.warning("Sin resultados para ese filtro.")
+        else:
+            sel_aj = st.selectbox("Producto a ajustar", filtered_aj,
+                                  key="aj_producto", label_visibility="collapsed")
+            sku_aj = sku_map_aj.get(sel_aj)
+
+            if sku_aj:
+                prod_aj = next((p for p in catalogo_aj if p["sku"] == sku_aj), None)
+                stock_aj = prod_aj.get("stock_actual", 0) if prod_aj else 0
+
+                st.markdown(
+                    f"<div style='font-size:13px;font-family:Poppins,sans-serif;margin:8px 0'>"
+                    f"Stock actual: <b>{stock_aj}</b></div>",
+                    unsafe_allow_html=True,
+                )
+
+                aj_c1, aj_c2 = st.columns([1, 2])
+                with aj_c1:
+                    delta_aj = st.number_input("Delta (+/-)", value=0, step=1,
+                                               key="aj_delta",
+                                               help="Positivo = sumar. Negativo = restar.")
+                with aj_c2:
+                    motivo_aj = st.text_input("Motivo (opcional)",
+                                              placeholder="Ej: corrección inventario físico",
+                                              key="aj_motivo")
+
+                if delta_aj != 0:
+                    nuevo_stock_preview = stock_aj + delta_aj
+                    st.markdown(
+                        f"<div style='font-size:13px;font-family:Poppins,sans-serif;"
+                        f"background:#f5f2eb;border:1.5px solid #d4d0c8;border-radius:2px;"
+                        f"padding:10px 14px;margin:10px 0'>"
+                        f"<b>{sku_aj}</b> — stock: "
+                        f"<b>{stock_aj}</b> → <b>{nuevo_stock_preview}</b> "
+                        f"(delta: <span style='color:{'#cc4444' if delta_aj < 0 else '#3a7a58'}'>"
+                        f"{'−' if delta_aj < 0 else '+'}{abs(delta_aj)}</span>)"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown(
+                        "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;"
+                        "margin:10px 0 4px'>Escribe <b>CONFIRMAR</b> para aplicar el ajuste:</div>",
+                        unsafe_allow_html=True,
+                    )
+                    confirm_text = st.text_input("Confirmación", key="aj_confirm",
+                                                 label_visibility="collapsed",
+                                                 placeholder="CONFIRMAR")
+
+                    if st.button("Aplicar ajuste", key="aj_aplicar", type="primary"):
+                        if confirm_text.strip().upper() != "CONFIRMAR":
+                            st.error("Escribe exactamente CONFIRMAR para proceder.")
+                        else:
+                            try:
+                                nuevo_stock = adjust_stock_with_log(
+                                    engine, sku_aj, int(delta_aj),
+                                    motivo_aj.strip() or None
+                                )
+                                get_inventario.clear()
+                                get_alertas_stock.clear()
+                                get_kpis.clear()
+                                if hasattr(get_stock_adjustment_logs := None, "clear"):
+                                    pass  # cleared on next admin view via button
+                                st.success(
+                                    f"Stock de {sku_aj} ajustado: "
+                                    f"{stock_aj} → {nuevo_stock}. Registrado en log."
+                                )
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                else:
+                    st.info("Ingresa un delta distinto de 0 para aplicar un ajuste.")
 
 
 # ---------------------------------------------------------------------------
@@ -1705,6 +1805,12 @@ def page_purchases(engine):
                         "Costo unitario (COP)": item.precio_costo_unitario,
                     })
 
+                # Track suggested SKUs for correction logging
+                suggested_skus_compra = {
+                    r["Producto (del proveedor)"]: sku_map.get(r["SKU en catálogo"]) or None
+                    for r in rows_editor
+                }
+
                 import pandas as pd
                 df_edit = pd.DataFrame(rows_editor)
 
@@ -1800,6 +1906,20 @@ def page_purchases(engine):
                             if df_save.empty:
                                 st.warning("No hay filas válidas. Revisa que cada producto tenga nombre y cantidad > 0.")
                             else:
+                                # Log SKU corrections (suggested ≠ confirmed)
+                                from app.db_queries import log_sku_correction as _log_sku
+                                for _, _row in df_save.iterrows():
+                                    _confirmed = _row["sku"]
+                                    _suggested = suggested_skus_compra.get(
+                                        str(_row["producto_nombre_raw"]).strip()
+                                    )
+                                    if _confirmed != _suggested:
+                                        try:
+                                            _log_sku(engine, str(_row["producto_nombre_raw"]),
+                                                     _suggested, _confirmed, "compra")
+                                        except Exception:
+                                            pass  # logging failure must not block the save
+
                                 from sqlalchemy.orm import Session as DBSession2
                                 from api.guardar_compra import save_purchase
                                 with DBSession2(engine) as session:
@@ -2190,71 +2310,183 @@ def page_sales(engine):
 # PÁGINA: CATÁLOGO Y GESTIÓN DE ALIASES
 # ---------------------------------------------------------------------------
 
-def page_catalog(engine):
-    st.markdown('<div class="cs-section-title">🏷️ Catálogo y Aliases de Productos</div>',
-                unsafe_allow_html=True)
+# ---------------------------------------------------------------------------
+# PÁGINA: BÚSQUEDA DE PRODUCTO
+# ---------------------------------------------------------------------------
 
+def page_product_search(engine):
+    from app.db_queries import get_product_transactions
+
+    st.markdown('<div class="cs-section-title">🔍 Búsqueda por Producto</div>',
+                unsafe_allow_html=True)
     st.markdown(
         "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;margin-bottom:16px'>"
-        "Los <b>aliases</b> son nombres alternativos separados por coma que el matcher de IA "
-        "usa como fallback cuando el nombre oficial no coincide. "
-        "Útil para distinguir variantes (sabor, tamaño) que comparten el mismo nombre base."
-        "</div>",
+        "Selecciona un producto para ver todas las ventas y compras que lo involucran.</div>",
         unsafe_allow_html=True,
     )
 
-    # ── Search filter ──
-    q = st.text_input("Buscar producto", placeholder="Nombre o SKU…", key="cat_search",
-                      label_visibility="collapsed")
-
-    productos = get_catalog_with_aliases(engine)
-    if q:
-        q_lower = q.lower()
-        productos = [p for p in productos if q_lower in p["nombre"].lower() or q_lower in p["sku"].lower()]
-
-    if not productos:
-        st.info("No se encontraron productos con ese criterio.")
+    catalogo = get_sku_catalog(engine)
+    if not catalogo:
+        st.info("No hay productos en el catálogo.")
         return
 
+    # ── Filtro de búsqueda + selectbox ──
+    q_prod = st.text_input("Filtrar catálogo", placeholder="Nombre, SKU o marca…",
+                           key="bs_filter", label_visibility="collapsed")
+    filtered = catalogo
+    if q_prod:
+        q_lower = q_prod.lower()
+        filtered = [p for p in catalogo
+                    if q_lower in p["nombre"].lower() or q_lower in p["sku"].lower()
+                    or q_lower in (p.get("marca") or "").lower()]
+
+    if not filtered:
+        st.warning("Sin resultados para ese filtro.")
+        return
+
+    opciones = [f"{p['sku']} — {p['nombre']}" for p in filtered]
+    seleccion = st.selectbox("Producto", opciones, key="bs_producto",
+                             label_visibility="collapsed")
+
+    if not seleccion:
+        return
+
+    sku_sel = seleccion.split(" — ")[0].strip()
+
+    # ── Stock actual ──
+    prod_info = next((p for p in catalogo if p["sku"] == sku_sel), None)
+    if prod_info:
+        stock_val = prod_info.get("stock_actual", "—")
+        stock_color = "#cc4444" if isinstance(stock_val, int) and stock_val < 0 else (
+            "#5aaa88" if isinstance(stock_val, int) and stock_val > 5 else "#1a1a1a"
+        )
+        st.markdown(
+            f"<div style='font-size:13px;font-family:Poppins,sans-serif;margin:8px 0 16px'>"
+            f"Stock actual: <b style='color:{stock_color}'>{stock_val}</b></div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Transacciones ──
+    df_tx = get_product_transactions(engine, sku_sel)
+
+    if df_tx.empty:
+        st.markdown(
+            "<div style='background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;"
+            "padding:20px;text-align:center;color:#aaa;font-family:Poppins,sans-serif'>"
+            "No hay transacciones registradas para este producto.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    n_ventas = (df_tx["Tipo"] == "Venta").sum()
+    n_compras = (df_tx["Tipo"] == "Compra").sum()
     st.markdown(
-        f'<div style="font-size:12px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:8px">'
-        f'{len(productos)} producto(s)</div>',
+        f"<div style='font-size:13px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:8px'>"
+        f"{len(df_tx)} transacciones · {n_ventas} ventas · {n_compras} compras</div>",
         unsafe_allow_html=True,
     )
 
-    # ── One row per product ──
-    for prod in productos:
-        sku = prod["sku"]
-        cols = st.columns([0.7, 2.5, 3, 0.8])
+    def _style_tipo(val):
+        if val == "Venta":
+            return "background-color:#f0f9f4;color:#3a7a58;font-weight:600"
+        return "background-color:#f5f2eb;color:#8a6a3a;font-weight:600"
 
-        with cols[0]:
+    display = df_tx[["Fecha", "Tipo", "Canal/Proveedor", "Cantidad",
+                      "Precio/Costo unit.", "Subtotal", "Referencia"]].copy()
+    display["Fecha"] = display["Fecha"].dt.strftime("%Y-%m-%d %H:%M")
+    for col in ["Precio/Costo unit.", "Subtotal"]:
+        display[col] = display[col].apply(
+            lambda v: f"${int(v):,}".replace(",", ".") if v and not (
+                isinstance(v, float) and __import__("math").isnan(v)) else "—"
+        )
+
+    styled = display.style.applymap(_style_tipo, subset=["Tipo"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# PÁGINA: ADMIN / LOGS
+# ---------------------------------------------------------------------------
+
+def page_admin(engine):
+    from app.db_queries import get_sku_match_logs, get_stock_adjustment_logs
+
+    st.markdown('<div class="cs-section-title">⚙️ Admin / Logs del Sistema</div>',
+                unsafe_allow_html=True)
+
+    tab_sku, tab_stock = st.tabs(["🔀 Correcciones de SKU", "📦 Ajustes de Stock"])
+
+    # ── Tab SKU corrections ──
+    with tab_sku:
+        st.markdown(
+            "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;margin-bottom:12px'>"
+            "Registro de casos donde el SKU sugerido por el matcher fue corregido manualmente "
+            "antes de guardar. Útil para identificar qué aliases agregar en la BD.</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("🔄 Actualizar", key="admin_sku_refresh"):
+            get_sku_match_logs.clear()
+
+        df_sku = get_sku_match_logs(engine)
+
+        if df_sku.empty:
             st.markdown(
-                f"<div style='font-size:12px;color:#aaa;font-family:Poppins,sans-serif;"
-                f"padding-top:8px'>{sku}</div>",
+                "<div style='background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;"
+                "padding:20px;text-align:center;color:#aaa;font-family:Poppins,sans-serif'>"
+                "Sin correcciones registradas aún.</div>",
                 unsafe_allow_html=True,
             )
-        with cols[1]:
+        else:
             st.markdown(
-                f"<div style='font-size:13px;font-family:Poppins,sans-serif;padding-top:8px'>"
-                f"{prod['nombre']}</div>",
+                f"<div style='font-size:12px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:8px'>"
+                f"Últimas {len(df_sku)} correcciones</div>",
                 unsafe_allow_html=True,
             )
-        with cols[2]:
-            new_alias = st.text_input(
-                "alias",
-                value=prod["alias"],
-                key=f"alias_{sku}",
-                placeholder="Alias1, Alias2, …",
-                label_visibility="collapsed",
+            display_sku = df_sku.copy()
+            display_sku["Fecha"] = display_sku["Fecha"].dt.strftime("%Y-%m-%d %H:%M")
+            display_sku["SKU sugerido"] = display_sku["SKU sugerido"].fillna("(ninguno)")
+            display_sku["SKU confirmado"] = display_sku["SKU confirmado"].fillna("(ninguno)")
+            display_sku["Nombre sugerido"] = display_sku["Nombre sugerido"].fillna("—")
+            st.dataframe(display_sku, use_container_width=True, hide_index=True)
+
+    # ── Tab stock adjustments ──
+    with tab_stock:
+        st.markdown(
+            "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;margin-bottom:12px'>"
+            "Historial de ajustes manuales de stock realizados desde la aplicación.</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("🔄 Actualizar", key="admin_stock_refresh"):
+            get_stock_adjustment_logs.clear()
+
+        df_adj = get_stock_adjustment_logs(engine)
+
+        if df_adj.empty:
+            st.markdown(
+                "<div style='background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;"
+                "padding:20px;text-align:center;color:#aaa;font-family:Poppins,sans-serif'>"
+                "Sin ajustes registrados aún.</div>",
+                unsafe_allow_html=True,
             )
-        with cols[3]:
-            if st.button("Guardar", key=f"alias_save_{sku}", use_container_width=True):
-                if new_alias.strip() != prod["alias"].strip():
-                    update_product_alias(engine, sku, new_alias)
-                    st.success(f"SKU {sku} actualizado.")
-                    st.rerun()
-                else:
-                    st.info("Sin cambios.")
+        else:
+            st.markdown(
+                f"<div style='font-size:12px;color:#aaa;font-family:Poppins,sans-serif;margin-bottom:8px'>"
+                f"Últimos {len(df_adj)} ajustes</div>",
+                unsafe_allow_html=True,
+            )
+
+            def _style_delta(val):
+                if isinstance(val, (int, float)):
+                    return "color:#3a7a58;font-weight:700" if val > 0 else (
+                        "color:#cc4444;font-weight:700" if val < 0 else ""
+                    )
+                return ""
+
+            display_adj = df_adj.copy()
+            display_adj["Fecha"] = display_adj["Fecha"].dt.strftime("%Y-%m-%d %H:%M")
+            display_adj["Motivo"] = display_adj["Motivo"].fillna("—")
+            styled_adj = display_adj.style.applymap(_style_delta, subset=["Delta"])
+            st.dataframe(styled_adj, use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2282,8 +2514,10 @@ def main():
         page_purchases(engine)
     elif page == "ventas":
         page_sales(engine)
-    elif page == "catalogo":
-        page_catalog(engine)
+    elif page == "busqueda":
+        page_product_search(engine)
+    elif page == "admin":
+        page_admin(engine)
 
 
 if __name__ == "__main__":
