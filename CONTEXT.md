@@ -6,7 +6,7 @@
 
 ## 1. ¿Qué es este proyecto?
 
-**Colsports** es un negocio colombiano de suplementos deportivos e implementos fitness (mancuernas, barras, discos, bandas de resistencia, proteínas, creatinas, etc.). Vende principalmente por WhatsApp, Rappi, Rappi Pro, TikTok Live, Instagram y canal Local.
+**Colsports** es un negocio colombiano de suplementos deportivos e implementos fitness (mancuernas, barras, discos, bandas de resistencia, proteínas, creatinas, etc.). Vende principalmente por WhatsApp, Rappi, Rappi Pro, TikTok Live, Instagram, Local y Página Web (WordPress).
 
 Este repositorio es el **sistema interno de ventas e inventario** de Colsports: una aplicación web privada (acceso por contraseña) que permite:
 
@@ -87,7 +87,7 @@ col-inventory-app/
 ## 4. Flujo de una venta
 
 ```
-Mensaje WhatsApp
+Mensaje WhatsApp / Rappi / Página Web / etc.
     │
     ▼
 motor_ia.parse_sale_message()
@@ -96,10 +96,16 @@ motor_ia.parse_sale_message()
     └─ ParsedSale validado con Pydantic
     │
     ▼
-Previsualización en Streamlit
-(el usuario revisa canal, cliente, items, montos, pago)
+Formulario editable en Streamlit (ANTES de confirmar)
+    ├─ Selectbox de canal (incluye "Página Web")
+    ├─ Campos de cliente editables (nombre, CC, teléfono, email)
+    ├─ data_editor de ítems con SKU pre-sugerido por IA (editable)
+    ├─ Selectbox de método de pago + cuenta destino
+    └─ Notas editables / totales en tiempo real
     │
     ▼ [Confirmar y Guardar]
+    │  ParsedSale reconstruido con los valores editados;
+    │  SaleItemData.sku contiene el SKU seleccionado en el editor
     │
 guardar_venta.save_sale()
     ├─ calculate_amounts()           subtotal/total/comisión en Python (no IA)
@@ -107,7 +113,8 @@ guardar_venta.save_sale()
     ├─ _get_or_create_customer()     → clientes
     ├─ INSERT ventas
     ├─ catalog = SELECT todos los Producto (una sola vez)
-    ├─ _match_sku() por item         F1-score nombre vs catálogo (umbral recall 60%)
+    ├─ _create_sale_items() por item:
+    │   └─ usa item.sku si ya viene resuelto; si no → _match_sku() F1-score (umbral 60%)
     ├─ INSERT venta_items
     ├─ INSERT pagos
     ├─ INSERT envios (si aplica)
@@ -241,7 +248,7 @@ Invalidar caches + st.rerun()
 
 | Página | Ruta `current_page` | Descripción |
 |---|---|---|
-| Nueva Venta | `nueva_venta` | Textarea → parsear → previsualizar → confirmar |
+| Nueva Venta | `nueva_venta` | Textarea → parsear → **formulario editable** (canal, cliente, ítems+SKU, pago, notas) → confirmar |
 | Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 5 productos (cards), últimas ventas, dinero por cuenta, visor de venta completa |
 | Inventario | `inventario` | Tabs: Catálogo / Alertas stock / Combos / Hot Products / **Ajuste Stock** |
 | Compras | `compras` | Tabs: Nueva Compra / Historial (con visor de detalle + edición inline últimas 24h) |
@@ -298,41 +305,12 @@ Implementada sobre `main`. Commit `365fd97`:
 - **SKU correction logging en compras**: al confirmar una compra, si el SKU confirmado difiere del sugerido, se inserta en `sku_match_log`. Logging es fire-and-forget: un fallo no bloquea el guardado.
 - Nuevos modelos: `SkuMatchLog`, `StockAdjustmentLog`. Migración: `python scripts/add_log_tables.py`.
 
-### 🔀 Rama `purchase-edit-and-fixes` (lista para merge)
-Implementada sobre `rappisync`. Commits principales:
-
-1. **`eafe4ed`** — Edición de compras con ajuste de stock:
-   - `update_purchase_items()` en `db_queries.py`: revierte stock anterior, aplica nuevo, todo atómico con column expressions.
-   - `get_purchase_detail()`: carga ítems con nombre de catálogo.
-   - `get_all_sales()`: agrega columna `fecha_dt` (timestamp crudo) para filtro de ventana.
-   - `get_recent_purchases()`: agrega columna `fecha_dt`.
-   - `update_sale_items()`: reemplaza ítems de venta, recalcula totales, actualiza estado/notas. **No ajusta stock** (por diseño).
-   - Fix en `get_top_products`: GROUP BY solo (sku, nombre) → barras del chart ya no fragmentadas.
-   - Fix CSS sidebar: header transparente, botón expand con color primario.
-
-2. **`d828108`** — Ventana de edición de 24 horas:
-   - Constante `EDIT_WINDOW_HOURS = 24`.
-   - Helper `_is_editable(fecha)`.
-   - `fecha_dt` añadido a ambas queries para comparación en pandas.
-
-3. **`dd79e6e`** — Edición inline en el historial:
-   - Eliminados tabs separados "Editar venta" y "Editar compra".
-   - Sección "Registros editables (últimas 24h)" al final del historial de cada página.
-   - Botón "✏️ Editar" por registro (toggle — un solo formulario abierto a la vez).
-   - Helpers `_render_purchase_edit_form()` y `_render_sale_edit_form()`.
-   - Widget keys incluyen el ID del registro para evitar conflictos entre formularios.
-
-4. **Commits adicionales** — Correcciones CSS sidebar y logo login:
-   - `pointer-events: none` en el header para no bloquear clicks en el contenido principal; `pointer-events: all` solo en el botón de toggle.
-   - Texto de keyboard shortcut de Streamlit 1.35+ oculto con `[data-testid="stSidebarCollapseButton"] p, span { display: none }`.
-   - Logo en la tarjeta de login embebido como base64 en el bloque HTML — elimina el cuadro vacío que aparecía sobre "Bienvenido".
-
-### 🔀 Rama `rappisync` (base de `purchase-edit-and-fixes`)
+### 🔀 Rama `rappisync` (en main a través de merges anteriores)
 Sincronización automática de disponibilidad con Rappi. Ver sección 13.
 
 ### 🔀 Rama `CombosManage` (pendiente de merge)
-- Mejora de `_match_sku`: también busca en campo `alias` por producto.
-- Requiere migración: `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;`
+- Mejora de `_match_sku`: también busca en campo `alias` por producto (ya implementado en main vía commits anteriores).
+- Requiere migración si no se ha corrido: `ALTER TABLE productos ADD COLUMN IF NOT EXISTS alias TEXT;`
 
 ### 🔀 Rama `updates` (pendiente de merge)
 Mejoras de UI y visor de venta completa. Validar antes de mergear.
@@ -410,9 +388,8 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 ## 16. Roadmap (próximos pasos)
 
 ### Prioridad alta
-- **Merge `purchase-edit-and-fixes` → `rappisync` → `main`**: rama lista.
-- **Merge `CombosManage` → main** + migración `alias` en DB: habilita distinción de variantes.
-- **Enriquecer aliases del catálogo**: agregar sabor/variante a los aliases de productos con múltiples variantes (ej: SKU 2030 vs 2045 para Creatina Creasmart sin sabor vs vainilla). Previene el error de matching más frecuente.
+- **Merge `opt-sale-edit-and-fixes` → `main`**: rama lista con editor de venta, canal Página Web y fixes de matching.
+- **Enriquecer aliases del catálogo**: agregar nombres alternativos a productos cuyo matching falla (ej: `bi pro sachet, bi pro saschet` para el sachet de BiPro; variantes por sabor como `creatina creasmart vainilla`). Es la acción más efectiva para reducir errores de matching.
 
 ### Prioridad media
 - **Ajuste manual de stock desde la app**: página o modal para `stock_actual += X` sin necesidad de crear una compra completa. Útil para correcciones de inventario físico.
@@ -445,3 +422,7 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 | `st.stop()` no va dentro de `try/except` | En Streamlit, `StopException` hereda de `BaseException`; un `except Exception` genérico puede capturarlo y silenciarlo |
 | `cs-card` no debe envolver widgets nativos | `st.markdown('<div class="cs-card">', ...)` seguido de widgets nativos de Streamlit genera una barra visual vacía: el div HTML y los widgets son nodos DOM hermanos, no padre/hijo |
 | `.pyc` no deben commitearse | El proyecto tuvo un bug por `.pyc` de una rama en otra. `.gitignore` cubre `__pycache__/`, `**/__pycache__/`, `*.pyc`, `*.pyo`. Los archivos ya trackeados se eliminaron del índice con `git rm -r --cached` |
+| `SaleItemData.sku` es asignado por la UI, nunca por el LLM | El LLM extrae `producto_nombre_raw`; el SKU se resuelve por F1-score o selección manual en el editor. Al viajar en el mismo objeto Pydantic, `_create_sale_items` puede saltarse el re-matching sin cambiar la firma de `save_sale` |
+| `sale_parse_v` para resetear el data_editor de nueva venta | El `data_editor` de Streamlit mantiene estado por `key`. Usar un contador que se incrementa con cada parseo garantiza que el editor se inicializa con los ítems nuevos sin depender de `sale_msg_v` (que controla el textarea) |
+| data_editor: extractor de filas con doble guard (isna + try/except) | `pandas.NA` en celdas vacías lanza `TypeError` en `pd.NA or ""`. El extractor usa `isna()` explícito antes de `str()` y envuelve en `try/except (TypeError, ValueError)` para tolerar cualquier tipo devuelto por Streamlit |
+| Aliases siempre compiten en `_match_sku`, no solo como fallback | Un nombre de catálogo largo (muchos tokens) tiene baja precisión F1 y puede perder contra un producto de nombre corto con match parcial. El alias "Megaplex 2 lb" (3 tokens, F1=1.0) perdía contra "Viga 2lb" (F1=0.67) porque el alias solo se evaluaba si `nombre_score == 0`. Ahora el alias siempre compite y reemplaza si es mejor. |
