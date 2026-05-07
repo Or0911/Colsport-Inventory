@@ -93,9 +93,10 @@ def _match_sku(catalog: list, raw_name: str) -> Optional[str]:
 
     Strategy:
     1. Score against product.nombre with F1 (60% recall threshold).
-    2. If no match on nombre, score each comma-separated entry in product.alias.
-       Aliases allow distinguishing variants: e.g. "Creatina Creasmart 550g Sin sabor"
-       maps SKU 2045 even when the catalog name is "Creatina Creasmart 550g - Sin sabor".
+    2. Always score each comma-separated alias entry too — aliases compete with the
+       nombre score and win if higher. This is necessary because a long nombre (many
+       tokens) lowers precision and can lose to an unrelated short-name product even
+       when the alias is a perfect match.
 
     Args:
         catalog:  List of Producto objects already fetched from the DB.
@@ -119,8 +120,8 @@ def _match_sku(catalog: list, raw_name: str) -> Optional[str]:
     for product in catalog:
         score = _f1_score(keywords, _tokenize(product.nombre))
 
-        # Fallback: check each alias entry if nombre didn't match
-        if score == 0.0 and product.alias:
+        # Always check aliases — a short alias often gives higher F1 than the long nombre
+        if product.alias:
             for alias_entry in product.alias.split(","):
                 alias_entry = alias_entry.strip()
                 if alias_entry:
