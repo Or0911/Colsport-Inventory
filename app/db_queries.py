@@ -862,7 +862,7 @@ def get_product_transactions(_engine, sku: str) -> pd.DataFrame:
         # Sales
         sale_rows = s.execute(
             select(
-                Venta.fecha_creacion,
+                Venta.fecha,
                 Canal.nombre.label("canal"),
                 VentaItem.cantidad,
                 VentaItem.precio_unitario,
@@ -874,12 +874,12 @@ def get_product_transactions(_engine, sku: str) -> pd.DataFrame:
             .join(Canal, Canal.id == Venta.canal_id)
             .where(VentaItem.sku == sku)
             .where(Venta.estado != EstadoVenta.cancelada)
-            .order_by(desc(Venta.fecha_creacion))
+            .order_by(desc(Venta.fecha))
         ).all()
 
         for r in sale_rows:
             rows.append({
-                "Fecha": r.fecha_creacion,
+                "Fecha": r.fecha,
                 "Tipo": "Venta",
                 "Canal/Proveedor": r.canal,
                 "Cantidad": r.cantidad,
