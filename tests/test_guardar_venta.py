@@ -75,9 +75,10 @@ class TestBuscarSku:
     @pytest.fixture
     def catalogo(self):
         class P:
-            def __init__(self, sku, nombre):
+            def __init__(self, sku, nombre, alias=None):
                 self.sku = sku
                 self.nombre = nombre
+                self.alias = alias
         return [
             P("PROT-001", "proteina whey gold standard"),
             P("BAND-001", "banda de latex azul wonder"),

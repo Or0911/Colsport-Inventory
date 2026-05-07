@@ -243,7 +243,7 @@ def test_parsear_mensaje_json_invalido(monkeypatch):
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai_cls.return_value = mock_client
 
-        with pytest.raises(ValueError, match="JSON inválido"):
+        with pytest.raises(ValueError, match="invalid JSON"):
             parsear_mensaje("VENTA LOCAL\nDiby")
 
 
