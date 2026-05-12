@@ -1020,6 +1020,149 @@ def get_stock_adjustment_logs(_engine, limit: int = 200) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Client analysis queries
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=300)
+def get_shipping_departments(_engine) -> list[str]:
+    """Returns distinct departments from the envios table, sorted alphabetically."""
+    with Session(_engine) as s:
+        rows = s.execute(
+            select(Envio.departamento)
+            .where(Envio.departamento.isnot(None))
+            .where(Envio.departamento != "")
+            .distinct()
+            .order_by(Envio.departamento)
+        ).scalars().all()
+    return [r for r in rows if r and r.strip()]
+
+
+@st.cache_data(ttl=120)
+def get_client_stats(
+    _engine,
+    start: date,
+    end: date,
+    departamento: Optional[str] = None,
+    limit: int = 50,
+) -> pd.DataFrame:
+    """
+    Per-client aggregates: number of purchases, total units bought, total spent,
+    and average ticket. Uses cliente_nombre_raw as the client identifier.
+    Optionally filtered by shipping department.
+
+    Two separate queries are used to avoid multiplying Venta.total when
+    joining with venta_items:
+      1. Aggregate ventas → total_cop, n_compras (no items join).
+      2. Aggregate venta_items → unidades (items join only).
+    Results are merged in Python by client name.
+    """
+    with Session(_engine) as s:
+        # ── Query 1: value & purchase count ──
+        value_q = (
+            select(
+                func.coalesce(Venta.cliente_nombre_raw, "Sin nombre").label("cliente"),
+                func.count(Venta.id).label("n_compras"),
+                func.coalesce(func.sum(Venta.total), 0).label("total_cop"),
+            )
+            .outerjoin(Envio, Envio.venta_id == Venta.id)
+            .where(Venta.estado != EstadoVenta.cancelada)
+            .where(func.date(Venta.fecha) >= start)
+            .where(func.date(Venta.fecha) <= end)
+        )
+        if departamento:
+            value_q = value_q.where(Envio.departamento == departamento)
+        value_q = (
+            value_q
+            .group_by(func.coalesce(Venta.cliente_nombre_raw, "Sin nombre"))
+            .order_by(desc("total_cop"))
+            .limit(limit)
+        )
+        value_rows = s.execute(value_q).all()
+
+        # ── Query 2: total units ──
+        units_q = (
+            select(
+                func.coalesce(Venta.cliente_nombre_raw, "Sin nombre").label("cliente"),
+                func.coalesce(func.sum(VentaItem.cantidad), 0).label("unidades"),
+            )
+            .join(VentaItem, VentaItem.venta_id == Venta.id)
+            .outerjoin(Envio, Envio.venta_id == Venta.id)
+            .where(Venta.estado != EstadoVenta.cancelada)
+            .where(func.date(Venta.fecha) >= start)
+            .where(func.date(Venta.fecha) <= end)
+        )
+        if departamento:
+            units_q = units_q.where(Envio.departamento == departamento)
+        units_q = units_q.group_by(func.coalesce(Venta.cliente_nombre_raw, "Sin nombre"))
+        units_rows = s.execute(units_q).all()
+
+    df_value = pd.DataFrame(value_rows, columns=["Cliente", "Compras", "Total"])
+    df_units = pd.DataFrame(units_rows, columns=["Cliente", "Unidades"])
+
+    if df_value.empty:
+        return pd.DataFrame(columns=["Cliente", "Compras", "Unidades", "Total", "Ticket Prom."])
+
+    df = df_value.merge(df_units, on="Cliente", how="left")
+    df["Unidades"] = df["Unidades"].fillna(0).astype(int)
+    df["Ticket Prom."] = (df["Total"] / df["Compras"].clip(lower=1)).astype(int)
+    return df[["Cliente", "Compras", "Unidades", "Total", "Ticket Prom."]]
+
+
+@st.cache_data(ttl=120)
+def get_client_category_breakdown(
+    _engine,
+    start: date,
+    end: date,
+    departamento: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Per-client, per-category spending — only for items with a resolved SKU.
+    Returns: Cliente | Categoría | Unidades | Total
+    Used to analyze who buys supplements vs sports equipment.
+    """
+    with Session(_engine) as s:
+        # func.lower normalizes "Suplemento"/"suplemento" → same bucket.
+        # initcap is applied in Python after the query for display.
+        cat_expr = func.lower(func.coalesce(Producto.categoria, "sin categoría"))
+
+        q = (
+            select(
+                func.coalesce(Venta.cliente_nombre_raw, "Sin nombre").label("cliente"),
+                cat_expr.label("categoria"),
+                func.coalesce(func.sum(VentaItem.cantidad), 0).label("unidades"),
+                func.coalesce(func.sum(VentaItem.subtotal), 0).label("total"),
+            )
+            .join(VentaItem, VentaItem.venta_id == Venta.id)
+            .join(Producto, VentaItem.sku == Producto.sku)
+            .outerjoin(Envio, Envio.venta_id == Venta.id)
+            .where(Venta.estado != EstadoVenta.cancelada)
+            .where(func.date(Venta.fecha) >= start)
+            .where(func.date(Venta.fecha) <= end)
+            .where(VentaItem.sku.isnot(None))
+        )
+        if departamento:
+            q = q.where(Envio.departamento == departamento)
+        q = (
+            q
+            .group_by(
+                func.coalesce(Venta.cliente_nombre_raw, "Sin nombre"),
+                cat_expr,
+            )
+            .order_by(
+                func.coalesce(Venta.cliente_nombre_raw, "Sin nombre"),
+                desc("total"),
+            )
+        )
+        rows = s.execute(q).all()
+
+    df = pd.DataFrame(rows, columns=["Cliente", "Categoría", "Unidades", "Total"])
+    # Capitalize for display ("suplemento" → "Suplemento", "implemento" → "Implemento")
+    if not df.empty:
+        df["Categoría"] = df["Categoría"].str.capitalize()
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Backward-compatible aliases (used by streamlit_app and legacy scripts)
 # ---------------------------------------------------------------------------
 get_ventas_por_canal = get_sales_by_channel

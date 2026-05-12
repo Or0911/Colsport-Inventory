@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-07 (v1.3-stable, rama main).
+> Actualizado el 2026-05-11 (v1.4-dev, rama analisis-clientes).
 
 ---
 
@@ -248,13 +248,15 @@ Invalidar caches + st.rerun()
 
 | Página | Ruta `current_page` | Descripción |
 |---|---|---|
-| Nueva Venta | `nueva_venta` | Textarea → parsear → **formulario editable** (canal, cliente, ítems+SKU, pago, notas) → confirmar |
 | Dashboard | `dashboard` | KPIs, tendencia, donut canal, top 5 productos (cards), últimas ventas, dinero por cuenta, visor de venta completa |
 | Inventario | `inventario` | Tabs: Catálogo / Alertas stock / Combos / Hot Products / **Ajuste Stock** |
 | Compras | `compras` | Tabs: Nueva Compra / Historial (con visor de detalle + edición inline últimas 24h) |
-| Ventas | `ventas` | Historial filtrable + visor de detalle por ID + edición inline (últimas 24h, sin ajuste de stock) |
+| Ventas | `ventas` | Tabs: **Nueva Venta** (formulario IA: textarea → parsear → editar → confirmar) / **Historial** (filtrable + visor + edición inline 24h) |
+| Análisis Clientes | `clientes` | KPIs de clientes, Tabs: Por Valor / Por Unidades / Por Categoría (Suplementos vs Implementos). Filtro por departamento y período. |
 | Búsqueda Producto | `busqueda` | Filtro de catálogo + transacciones unificadas (ventas+compras) por producto, ordenadas por fecha |
 | Admin / Logs | `admin` | Tab Correcciones SKU (`sku_match_log`) + Tab Ajustes de Stock (`stock_adjustment_log`) |
+
+> **Nota**: La página `nueva_venta` fue eliminada del sidebar en v1.4. Su contenido se integró como primera pestaña de `ventas`. Las sesiones antiguas con `current_page = "nueva_venta"` son redirigidas automáticamente a `"ventas"`.
 
 ---
 
@@ -283,6 +285,17 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 ---
 
 ## 12. Estado actual (2026-05-07)
+
+### 🔧 Rama `analisis-clientes` — en desarrollo
+
+- **Página Ventas refactorizada**: dos tabs — `📝 Nueva Venta` (formulario IA, antes en `nueva_venta`) + `📋 Historial` (historial filtrable + edición 24h).
+- **Página `clientes`** (nueva): Análisis por clientes con filtro de período y departamento.
+  - Tab *Por Valor*: ranking por total gastado + gráfico horizontal + tabla.
+  - Tab *Por Unidades*: ranking por unidades compradas + gráfico + tabla.
+  - Tab *Por Categoría*: clasificación Suplementos / Implementos configurable via multiselect; gráfico de barras apiladas; KPIs de clientes exclusivos por tipo.
+- **Nuevas queries en `db_queries.py`**: `get_shipping_departments`, `get_client_stats`, `get_client_category_breakdown`.
+- `current_page` default cambiado de `"nueva_venta"` → `"ventas"`.
+- Redirect automático para sesiones antiguas con `current_page = "nueva_venta"`.
 
 ### ✅ Rama `main` — en producción (estado completo)
 
@@ -401,6 +414,8 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 - Búsqueda de transacciones por producto
 - Página Admin/Logs (correcciones SKU + ajustes stock)
 - SKU correction logging en compras y ventas
+- **Ventas con dos tabs** (Nueva Venta + Historial) — rama analisis-clientes
+- **Análisis por Clientes** (página nueva, rama analisis-clientes): ranking por valor, por unidades, por categoría (Suplementos/Implementos) + filtro por departamento
 
 ---
 
