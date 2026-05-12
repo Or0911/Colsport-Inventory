@@ -297,8 +297,10 @@ from app.db_queries import (
     get_combo_virtual_stock, get_order_alerts, mark_alert_resolved,
     get_recent_purchases, get_sku_catalog,
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
-    get_sale_detail, get_money_by_account, get_all_sales, update_sale, update_sale_items,
+    get_sale_detail, get_money_by_account, get_all_sales, update_sale_items,
     get_kpis_period, get_purchase_detail, update_purchase_items,
+    # client analysis
+    get_shipping_departments, get_client_stats, get_client_category_breakdown,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
@@ -337,7 +339,7 @@ def _is_editable(fecha) -> bool:
 def init_session():
     defaults = {
         "authenticated": False,
-        "current_page": "nueva_venta",
+        "current_page": "ventas",
         "sale_saved": False,
         "parsed_sale": None,
         "sale_montos": None,
@@ -498,16 +500,23 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
 
-        icons = {"nueva_venta": "📝", "dashboard": "📊", "inventario": "📦",
-                 "compras": "🛒", "ventas": "📋", "busqueda": "🔍", "admin": "⚙️"}
+        icons = {
+            "dashboard":  "📊",
+            "inventario": "📦",
+            "compras":    "🛒",
+            "ventas":     "📋",
+            "clientes":   "👥",
+            "busqueda":   "🔍",
+            "admin":      "⚙️",
+        }
         labels = {
-            "nueva_venta": "Nueva Venta",
-            "dashboard": "Dashboard",
+            "dashboard":  "Dashboard",
             "inventario": "Inventario",
-            "compras": "Compras",
-            "ventas": "Ventas",
-            "busqueda": "Búsqueda Producto",
-            "admin": "Admin / Logs",
+            "compras":    "Compras",
+            "ventas":     "Ventas",
+            "clientes":   "Análisis Clientes",
+            "busqueda":   "Búsqueda Producto",
+            "admin":      "Admin / Logs",
         }
         for page, label in labels.items():
             if st.button(f"{icons[page]}  {label}", key=f"nav_{page}",
@@ -522,7 +531,7 @@ def render_sidebar():
 
         if st.button("🔒  Cerrar sesión", use_container_width=True):
             st.session_state.authenticated = False
-            st.session_state.current_page = "nueva_venta"
+            st.session_state.current_page = "ventas"
             st.rerun()
 
         st.markdown(
@@ -537,9 +546,8 @@ def render_sidebar():
 # PÁGINA: NUEVA VENTA
 # ---------------------------------------------------------------------------
 
-def page_new_sale(engine):
-    st.markdown('<div class="cs-section-title">📝 Nueva Venta</div>', unsafe_allow_html=True)
-
+def _render_new_sale_content(engine):
+    """Renders the new-sale form. Called from within the Ventas page tabs."""
     if "sale_msg_v" not in st.session_state:
         st.session_state["sale_msg_v"] = 0
     sale_key = f"sale_msg_{st.session_state['sale_msg_v']}"
@@ -2204,9 +2212,8 @@ def _render_sale_edit_form(engine, detalle_edit: dict) -> None:
             st.rerun()
 
 
-def page_sales(engine):
-    st.markdown('<div class="cs-section-title">📋 Ventas</div>', unsafe_allow_html=True)
-
+def _render_sales_history(engine):
+    """Renders the sales history table, detail viewer, and 24h inline editor."""
     import pandas as _pd_sv2
 
     # ── Filters ──
@@ -2325,6 +2332,380 @@ def page_sales(engine):
                         unsafe_allow_html=True,
                     )
                     _render_sale_edit_form(engine, detalle_edit)
+
+
+def page_sales(engine):
+    st.markdown('<div class="cs-section-title">📋 Ventas</div>', unsafe_allow_html=True)
+
+    tab_nueva, tab_historial = st.tabs(["📝 Nueva Venta", "📋 Historial"])
+
+    with tab_nueva:
+        _render_new_sale_content(engine)
+
+    with tab_historial:
+        _render_sales_history(engine)
+
+
+# ---------------------------------------------------------------------------
+# PÁGINA: ANÁLISIS POR CLIENTES
+# ---------------------------------------------------------------------------
+
+# Default category grouping — can be updated via multiselect in the UI.
+# Categories whose name contains any of these substrings (case-insensitive)
+# are classified as "Suplementos"; the rest as "Implementos".
+_SUPLEMENTO_KEYWORDS = [
+    "suplemento", "proteina", "proteína", "whey", "creatina", "pre-entreno",
+    "preentreno", "aminoacid", "bcaa", "quemador", "vitamina", "colageno",
+    "colágeno", "omega", "ganador", "mass", "hipercalorico", "hipercalórico",
+    "recovery", "recuperacion", "recuperación", "energizante", "barra proteica",
+    "nutri",
+]
+
+
+def _classify_category(cat: str, suplemento_cats: set[str]) -> str:
+    """Returns 'Suplementos' if cat is in suplemento_cats, else 'Implementos'."""
+    return "Suplementos" if cat in suplemento_cats else "Implementos"
+
+
+def page_clientes(engine):
+    from app.db_queries import (
+        get_shipping_departments,
+        get_client_stats,
+        get_client_category_breakdown,
+    )
+    import pandas as _pd_cl
+    import plotly.express as _px
+
+    st.markdown('<div class="cs-section-title">👥 Análisis por Clientes</div>',
+                unsafe_allow_html=True)
+
+    # ── Period + department filters (shared across all tabs) ──
+    f1, f2, f3 = st.columns([1, 1, 2])
+    with f1:
+        cl_start = st.date_input("Desde", value=date.today() - timedelta(days=89),
+                                 key="cl_start")
+    with f2:
+        cl_end = st.date_input("Hasta", value=date.today(), key="cl_end")
+    with f3:
+        deptos = get_shipping_departments(engine)
+        depto_opts = ["Todos los departamentos"] + deptos
+        cl_depto = st.selectbox("Departamento", depto_opts, key="cl_depto",
+                                label_visibility="collapsed")
+    depto_filter = None if cl_depto == "Todos los departamentos" else cl_depto
+
+    # ── Quick-period shortcuts ──
+    qc = st.columns(4)
+    for i, (lbl, delta) in enumerate([("30 días", 29), ("90 días", 89),
+                                       ("6 meses", 179), ("Este año", 364)]):
+        if qc[i].button(lbl, key=f"cl_period_{delta}"):
+            st.session_state["cl_start"] = date.today() - timedelta(days=delta)
+            st.session_state["cl_end"] = date.today()
+            st.rerun()
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    # ── Load main data ──
+    df_stats = get_client_stats(engine, cl_start, cl_end, departamento=depto_filter)
+    df_cat   = get_client_category_breakdown(engine, cl_start, cl_end, departamento=depto_filter)
+
+    # ── Summary KPIs ──
+    if not df_stats.empty:
+        n_clientes  = len(df_stats)
+        total_rev   = int(df_stats["Total"].sum())
+        ticket_prom = int(total_rev / df_stats["Compras"].sum()) if df_stats["Compras"].sum() > 0 else 0
+        top_cliente = df_stats.iloc[0]["Cliente"]
+
+        k1, k2, k3, k4 = st.columns(4)
+        from app.charts import kpi_card
+        k1.markdown(kpi_card("Clientes únicos", str(n_clientes),
+                             f"en el período", "#555"), unsafe_allow_html=True)
+        k2.markdown(kpi_card("Ingresos totales", fmt_cop(total_rev),
+                             f"{int(df_stats['Compras'].sum())} ventas", "#555"),
+                    unsafe_allow_html=True)
+        k3.markdown(kpi_card("Ticket promedio", fmt_cop(ticket_prom),
+                             "por transacción", "#5aaa88"), unsafe_allow_html=True)
+        k4.markdown(kpi_card("Cliente top", top_cliente[:28] + "…"
+                             if len(top_cliente) > 28 else top_cliente,
+                             fmt_cop(int(df_stats.iloc[0]["Total"])), "#4488aa"),
+                    unsafe_allow_html=True)
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    tab_valor, tab_items, tab_categoria = st.tabs(
+        ["💰 Por Valor", "📦 Por Unidades", "🏷️ Por Categoría"]
+    )
+
+    # ── Tab 1: ranking by total spent ──
+    with tab_valor:
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:16px;'
+            'border-bottom:1px solid #e0ddd8;margin-bottom:12px">'
+            'Clientes que más han gastado</div>',
+            unsafe_allow_html=True,
+        )
+
+        if df_stats.empty:
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Poppins,sans-serif">'
+                'No hay datos de clientes en el período seleccionado.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            top_n = st.slider("Top N clientes", min_value=5, max_value=50,
+                              value=15, step=5, key="cl_top_n_valor")
+            df_top_v = df_stats.head(top_n).copy()
+
+            # Bar chart
+            fig_v = _px.bar(
+                df_top_v.sort_values("Total"),
+                x="Total", y="Cliente",
+                orientation="h",
+                text=df_top_v.sort_values("Total")["Total"].apply(fmt_cop),
+                color="Total",
+                color_continuous_scale=["#d4d0c8", "#314457"],
+                labels={"Total": "Total gastado (COP)", "Cliente": ""},
+            )
+            fig_v.update_traces(textposition="outside", textfont_size=11)
+            fig_v.update_layout(
+                height=max(300, top_n * 28),
+                margin=dict(l=0, r=40, t=20, b=20),
+                coloraxis_showscale=False,
+                plot_bgcolor="#fffef9",
+                paper_bgcolor="#fffef9",
+                font_family="Poppins",
+            )
+            st.plotly_chart(fig_v, use_container_width=True)
+
+            # Detail table
+            with st.expander("Ver tabla completa", expanded=False):
+                display_v = df_top_v.copy()
+                display_v["Total"] = display_v["Total"].apply(fmt_cop)
+                display_v["Ticket Prom."] = display_v["Ticket Prom."].apply(fmt_cop)
+                st.dataframe(display_v, use_container_width=True, hide_index=True)
+
+    # ── Tab 2: ranking by units ──
+    with tab_items:
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:16px;'
+            'border-bottom:1px solid #e0ddd8;margin-bottom:12px">'
+            'Clientes que más unidades han comprado</div>',
+            unsafe_allow_html=True,
+        )
+
+        if df_stats.empty:
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Poppins,sans-serif">'
+                'No hay datos en el período seleccionado.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            df_top_u = df_stats.sort_values("Unidades", ascending=False).copy()
+            top_nu = st.slider("Top N clientes", min_value=5, max_value=50,
+                               value=15, step=5, key="cl_top_n_items")
+            df_top_u = df_top_u.head(top_nu)
+
+            fig_u = _px.bar(
+                df_top_u.sort_values("Unidades"),
+                x="Unidades", y="Cliente",
+                orientation="h",
+                text="Unidades",
+                color="Unidades",
+                color_continuous_scale=["#d4d0c8", "#5aaa88"],
+                labels={"Unidades": "Unidades compradas", "Cliente": ""},
+            )
+            fig_u.update_traces(textposition="outside", textfont_size=11)
+            fig_u.update_layout(
+                height=max(300, top_nu * 28),
+                margin=dict(l=0, r=40, t=20, b=20),
+                coloraxis_showscale=False,
+                plot_bgcolor="#fffef9",
+                paper_bgcolor="#fffef9",
+                font_family="Poppins",
+            )
+            st.plotly_chart(fig_u, use_container_width=True)
+
+            with st.expander("Ver tabla completa", expanded=False):
+                display_u = df_top_u[["Cliente", "Unidades", "Compras", "Total"]].copy()
+                display_u["Total"] = display_u["Total"].apply(fmt_cop)
+                st.dataframe(display_u, use_container_width=True, hide_index=True)
+
+    # ── Tab 3: by product category ──
+    with tab_categoria:
+        st.markdown(
+            '<div class="cs-section-title" style="font-size:16px;'
+            'border-bottom:1px solid #e0ddd8;margin-bottom:12px">'
+            'Qué tipo de productos compra cada cliente</div>',
+            unsafe_allow_html=True,
+        )
+
+        if df_cat.empty:
+            st.markdown(
+                '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'
+                'padding:20px;text-align:center;color:#aaa;font-family:Poppins,sans-serif">'
+                'No hay datos de categorías para el período seleccionado. '
+                'Solo se cuentan ítems con SKU asignado.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # ── Category classifier ──
+            all_cats = sorted(df_cat["Categoría"].unique().tolist())
+            default_suplementos = [
+                c for c in all_cats
+                if any(kw in c.lower() for kw in _SUPLEMENTO_KEYWORDS)
+            ]
+            default_implementos = [c for c in all_cats if c not in default_suplementos]
+
+            st.markdown(
+                "<div style='font-size:13px;color:#888;font-family:Poppins,sans-serif;"
+                "margin-bottom:10px'>Clasifica las categorías de tu catálogo para calcular"
+                " el resumen Suplementos / Implementos.</div>",
+                unsafe_allow_html=True,
+            )
+
+            col_sup, col_imp = st.columns(2)
+            with col_sup:
+                cats_suplementos = st.multiselect(
+                    "🟢 Categorías → Suplementos",
+                    options=all_cats,
+                    default=default_suplementos,
+                    key="cl_cats_sup",
+                )
+            with col_imp:
+                st.markdown(
+                    "<div style='font-size:12px;color:#aaa;font-family:Poppins,sans-serif;"
+                    "margin-top:28px'>Las categorías no seleccionadas como Suplementos "
+                    "se clasifican automáticamente como <b>Implementos</b>.</div>",
+                    unsafe_allow_html=True,
+                )
+
+            suplemento_set = set(cats_suplementos)
+
+            # Pivot: cliente × tipo (Suplementos | Implementos)
+            df_cat_copy = df_cat.copy()
+            df_cat_copy["Tipo"] = df_cat_copy["Categoría"].apply(
+                lambda c: _classify_category(c, suplemento_set)
+            )
+            df_pivot = (
+                df_cat_copy
+                .groupby(["Cliente", "Tipo"])["Total"]
+                .sum()
+                .unstack(fill_value=0)
+                .reset_index()
+            )
+            # Ensure both columns exist even if one group has no data
+            for col in ["Suplementos", "Implementos"]:
+                if col not in df_pivot.columns:
+                    df_pivot[col] = 0
+            df_pivot["Total"] = df_pivot["Suplementos"] + df_pivot["Implementos"]
+            df_pivot = df_pivot.sort_values("Total", ascending=False)
+
+            # ── KPI split ──
+            only_sup = (df_pivot["Implementos"] == 0) & (df_pivot["Suplementos"] > 0)
+            only_imp = (df_pivot["Suplementos"] == 0) & (df_pivot["Implementos"] > 0)
+            both     = (df_pivot["Suplementos"] > 0) & (df_pivot["Implementos"] > 0)
+
+            ck1, ck2, ck3 = st.columns(3)
+            ck1.metric("Solo Suplementos", int(only_sup.sum()),
+                       help="Clientes que únicamente compraron suplementos")
+            ck2.metric("Solo Implementos", int(only_imp.sum()),
+                       help="Clientes que únicamente compraron implementos")
+            ck3.metric("Compraron ambos", int(both.sum()),
+                       help="Clientes que compraron suplementos e implementos")
+
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+            # ── Stacked bar chart ──
+            top_nc = st.slider("Top N clientes", min_value=5, max_value=40,
+                               value=15, step=5, key="cl_top_n_cat")
+            df_chart_cat = df_pivot.head(top_nc).copy()
+            df_melt = df_chart_cat[["Cliente", "Suplementos", "Implementos"]].melt(
+                id_vars="Cliente", var_name="Tipo", value_name="Total"
+            )
+
+            fig_cat = _px.bar(
+                df_melt.sort_values("Total"),
+                x="Total", y="Cliente",
+                color="Tipo",
+                orientation="h",
+                barmode="stack",
+                color_discrete_map={
+                    "Suplementos": "#314457",
+                    "Implementos": "#5aaa88",
+                },
+                labels={"Total": "Total (COP)", "Cliente": ""},
+                text=df_melt["Total"].apply(
+                    lambda v: fmt_cop(v) if v > 0 else ""
+                ),
+            )
+            fig_cat.update_traces(textposition="inside", textfont_size=10)
+            fig_cat.update_layout(
+                height=max(320, top_nc * 30),
+                margin=dict(l=0, r=20, t=20, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="right", x=1),
+                plot_bgcolor="#fffef9",
+                paper_bgcolor="#fffef9",
+                font_family="Poppins",
+            )
+            st.plotly_chart(fig_cat, use_container_width=True)
+
+            # ── Explicit client lists per type ──
+            st.markdown(
+                "<hr style='border:none;border-top:1px solid #e0ddd8;margin:16px 0'>",
+                unsafe_allow_html=True,
+            )
+            list_sup, list_imp = st.columns(2)
+
+            clients_sup = (
+                df_pivot[df_pivot["Suplementos"] > 0]
+                .sort_values("Suplementos", ascending=False)[["Cliente", "Suplementos"]]
+                .rename(columns={"Suplementos": "Total (COP)"})
+                .copy()
+            )
+            clients_imp = (
+                df_pivot[df_pivot["Implementos"] > 0]
+                .sort_values("Implementos", ascending=False)[["Cliente", "Implementos"]]
+                .rename(columns={"Implementos": "Total (COP)"})
+                .copy()
+            )
+
+            with list_sup:
+                st.markdown(
+                    f'<div style="font-size:14px;font-weight:600;color:#314457;'
+                    f'font-family:Poppins,sans-serif;margin-bottom:6px">'
+                    f'🟢 Clientes de Suplementos ({len(clients_sup)})</div>',
+                    unsafe_allow_html=True,
+                )
+                if clients_sup.empty:
+                    st.caption("Sin datos")
+                else:
+                    disp_sup = clients_sup.copy()
+                    disp_sup["Total (COP)"] = disp_sup["Total (COP)"].apply(fmt_cop)
+                    st.dataframe(disp_sup, use_container_width=True, hide_index=True,
+                                 height=min(400, (len(disp_sup) + 1) * 36))
+
+            with list_imp:
+                st.markdown(
+                    f'<div style="font-size:14px;font-weight:600;color:#5aaa88;'
+                    f'font-family:Poppins,sans-serif;margin-bottom:6px">'
+                    f'🔵 Clientes de Implementos ({len(clients_imp)})</div>',
+                    unsafe_allow_html=True,
+                )
+                if clients_imp.empty:
+                    st.caption("Sin datos")
+                else:
+                    disp_imp = clients_imp.copy()
+                    disp_imp["Total (COP)"] = disp_imp["Total (COP)"].apply(fmt_cop)
+                    st.dataframe(disp_imp, use_container_width=True, hide_index=True,
+                                 height=min(400, (len(disp_imp) + 1) * 36))
+
+            # ── Detail table ──
+            with st.expander("Ver desglose exacto por categoría", expanded=False):
+                display_cat = df_cat.copy()
+                display_cat["Total"] = display_cat["Total"].apply(fmt_cop)
+                st.dataframe(display_cat, use_container_width=True, hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2525,8 +2906,10 @@ def main():
     render_sidebar()
 
     page = st.session_state.current_page
+    # Legacy redirect: "nueva_venta" no longer exists as a separate page.
     if page == "nueva_venta":
-        page_new_sale(engine)
+        st.session_state.current_page = "ventas"
+        st.rerun()
     elif page == "dashboard":
         page_dashboard(engine)
     elif page == "inventario":
@@ -2535,6 +2918,8 @@ def main():
         page_purchases(engine)
     elif page == "ventas":
         page_sales(engine)
+    elif page == "clientes":
+        page_clientes(engine)
     elif page == "busqueda":
         page_product_search(engine)
     elif page == "admin":
