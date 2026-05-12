@@ -1020,7 +1020,8 @@ def get_stock_adjustment_logs(_engine, limit: int = 200) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Client analysis queries
+# Client analysis queries — get_shipping_departments, get_client_stats,
+# get_client_category_breakdown
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=300)
