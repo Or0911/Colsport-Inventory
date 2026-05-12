@@ -299,8 +299,6 @@ from app.db_queries import (
     get_purchase_kpis, get_purchase_trend, get_purchases_by_supplier, get_daily_margin,
     get_sale_detail, get_money_by_account, get_all_sales, update_sale_items,
     get_kpis_period, get_purchase_detail, update_purchase_items,
-    # client analysis
-    get_shipping_departments, get_client_stats, get_client_category_breakdown,
     # legacy aliases kept for cache-clear calls
     get_ventas_por_canal, get_tendencia_diaria, get_top_productos,
     get_top_facturadores, get_ventas_recientes, get_alertas_stock,
