@@ -14,7 +14,19 @@
       "Bash(python scripts/mapear_rappi_skus.py)",
       "Bash(python -m py_compile app/streamlit_app.py)",
       "Bash(python -m py_compile app/db_queries.py)",
-      "Bash(grep -E \"\\\\.\\(pyc\\)$|__pycache__\")"
+      "Bash(grep -E \"\\\\.\\(pyc\\)$|__pycache__\")",
+      "Bash(git checkout *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/streamlit_app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(git stash *)",
+      "Bash(git pull *)",
+      "Bash(git push *)",
+      "Bash(python -c \"from sqlalchemy import create_engine; import os; from dotenv import load_dotenv; load_dotenv\\('.env'\\); e = create_engine\\(os.getenv\\('DATABASE_URL'\\)\\); from sqlalchemy import text; r = e.connect\\(\\).execute\\(text\\('SELECT DISTINCT categoria FROM productos WHERE categoria IS NOT NULL ORDER BY categoria'\\)\\); [print\\(row[0]\\) for row in r]\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python -c \"from app.db_queries import get_shipping_departments, get_client_stats, get_client_category_breakdown; print\\('OK'\\)\")",
+      "Bash(Select-String -Pattern \"get_shipping_departments|get_client_stats|get_client_category_breakdown\" app/db_queries.py)",
+      "Bash(Select-Object -First 10)",
+      "Bash(git commit *)"
     ]
   }
 }

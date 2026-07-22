@@ -1,6 +1,6 @@
 # Colsports — Archivo de Contexto del Proyecto
 
-> Actualizado el 2026-05-11 (v1.4-dev, rama analisis-clientes).
+> Actualizado el 2026-05-12 (v1.4, main).
 
 ---
 
@@ -39,7 +39,7 @@ Este repositorio es el **sistema interno de ventas e inventario** de Colsports: 
 ```
 col-inventory-app/
 ├── app/
-│   ├── streamlit_app.py     ← Interfaz principal (login, sidebar, 5 páginas)
+│   ├── streamlit_app.py     ← Interfaz principal (login, sidebar, 7 páginas)
 │   ├── db_queries.py        ← Todas las queries de lectura/escritura (@st.cache_data)
 │   └── charts.py            ← Gráficos Plotly (tendencia, canal, top productos)
 │
@@ -284,21 +284,22 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 
 ---
 
-## 12. Estado actual (2026-05-07)
+## 12. Estado actual (2026-05-12)
 
-### 🔧 Rama `analisis-clientes` — en desarrollo
+### ✅ Rama `main` — en producción (estado completo)
 
-- **Página Ventas refactorizada**: dos tabs — `📝 Nueva Venta` (formulario IA, antes en `nueva_venta`) + `📋 Historial` (historial filtrable + edición 24h).
+#### Incluido desde `analisis-clientes` (mergeado 2026-05-12)
+- **Página Ventas refactorizada**: dos tabs — `📝 Nueva Venta` (formulario IA) + `📋 Historial` (historial filtrable + edición 24h). Página `nueva_venta` eliminada del sidebar.
 - **Página `clientes`** (nueva): Análisis por clientes con filtro de período y departamento.
   - Tab *Por Valor*: ranking por total gastado + gráfico horizontal + tabla.
   - Tab *Por Unidades*: ranking por unidades compradas + gráfico + tabla.
   - Tab *Por Categoría*: clasificación Suplementos / Implementos configurable via multiselect; gráfico de barras apiladas; KPIs de clientes exclusivos por tipo.
-- **Nuevas queries en `db_queries.py`**: `get_shipping_departments`, `get_client_stats`, `get_client_category_breakdown`.
-- `current_page` default cambiado de `"nueva_venta"` → `"ventas"`.
-- Redirect automático para sesiones antiguas con `current_page = "nueva_venta"`.
+- **Nuevas queries en `db_queries.py`**: `get_shipping_departments`, `get_client_stats`, `get_client_category_breakdown` (inline imports para evitar ImportError en Cloud).
+- Fix ImportError en Streamlit Cloud: imports de análisis-clientes movidos a inline en `page_clientes()` + commit de toque a `db_queries.py` para invalidar bytecode cache (`.pyc`) en Cloud.
 
-### ✅ Rama `main` — en producción (estado completo)
+#### Estado previo (v1.3, ya en main)
 
+##### Funcionalidades base
 - Login con contraseña
 - Registro de ventas (todos los canales), descuento de stock automático; editor de ítems con SKU pre-sugerido
 - Cálculo de comisiones Rappi; detección de orden duplicada (`DuplicateRappiOrderError`)
@@ -313,6 +314,10 @@ En Streamlit Cloud se configuran en **Settings → Secrets** (formato TOML).
 - Sistema de aliases para matching; gestión vía SQL directo.
 - Sistema de estilos Poppins + tema marrón/canvas configurable por env vars.
 - Rappi sync: apaga/enciende disponibilidad según stock.
+
+### Pendiente / próximos fixes en `clientes`
+
+Ver sección 16 → prioridad alta (Análisis Clientes).
 
 ### Ramas locales activas
 - `main` — rama principal
@@ -394,6 +399,12 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 ## 16. Roadmap (próximos pasos)
 
 ### Prioridad alta
+
+#### Mejoras página Análisis Clientes
+- **Filtros rápidos de período** en página `clientes`: botones *Última semana* / *Último mes* / *Últimos 3 meses* que pre-rellenen los date_inputs `cl_start` / `cl_end` via `st.session_state`. Actualmente el usuario debe ajustar las fechas manualmente; los accesos directos agilizan el análisis recurrente.
+- **Exportar clientes a CSV/Excel** desde página `clientes`: botón `st.download_button` que genere un CSV con el ranking de clientes visible (columnas: Cliente, Compras, Unidades, Total, Ticket Prom.) y también sus datos de contacto (teléfono, email) cruzando con la tabla `clientes` por nombre. Requiere nueva query `get_client_export(_engine, start, end, departamento)` que haga LEFT JOIN `ventas → clientes` y devuelva el DataFrame extendido. Útil para campañas de recontacto.
+
+#### SKU matching
 - **Enriquecer aliases del catálogo**: agregar nombres alternativos a productos cuyo matching falla (ej: `bi pro sachet, bi pro saschet` para el sachet de BiPro; variantes por sabor). Es la acción más efectiva para reducir errores de matching. Ver Admin → Correcciones de SKU para identificar qué aliases agregar.
 
 ### Prioridad media
@@ -415,7 +426,8 @@ python scripts/reset_data.py   # pide escribir "RESET" para confirmar
 - Página Admin/Logs (correcciones SKU + ajustes stock)
 - SKU correction logging en compras y ventas
 - **Ventas con dos tabs** (Nueva Venta + Historial) — rama analisis-clientes
-- **Análisis por Clientes** (página nueva, rama analisis-clientes): ranking por valor, por unidades, por categoría (Suplementos/Implementos) + filtro por departamento
+- **Análisis por Clientes** (página nueva): ranking por valor, por unidades, por categoría (Suplementos/Implementos) + filtro por departamento
+- **Fix ImportError en Cloud**: imports de análisis-clientes en inline + toque a `db_queries.py` para invalidar caché `.pyc`
 
 ---
 

@@ -36,8 +36,8 @@ def main():
         ],
         checkfirst=True,
     )
-    print("✓ sku_match_log created/verified")
-    print("✓ stock_adjustment_log created/verified")
+    print("OK sku_match_log created/verified")
+    print("OK stock_adjustment_log created/verified")
 
 
 if __name__ == "__main__":

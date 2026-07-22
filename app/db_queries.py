@@ -452,7 +452,10 @@ def get_sku_catalog(_engine) -> list[dict]:
         rows = s.execute(
             select(Producto.sku, Producto.nombre, Producto.stock_actual).order_by(Producto.nombre)
         ).all()
-    return [{"sku": r.sku, "nombre": r.nombre, "stock_actual": r.stock_actual} for r in rows]
+    return [
+        {"sku": r.sku, "nombre": " ".join(r.nombre.split()), "stock_actual": r.stock_actual}
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -668,10 +671,14 @@ def update_sale_items(
         precio_unitario int
     """
     from sqlalchemy import update as sql_update, delete as sql_delete
+    from api.guardar_venta import _match_sku
     with Session(engine) as s:
         sale = s.execute(select(Venta).where(Venta.id == sale_id)).scalar_one()
 
         s.execute(sql_delete(VentaItem).where(VentaItem.venta_id == sale_id))
+
+        # Loaded lazily only if some row is missing a SKU (avoids the query otherwise).
+        catalog = None
 
         new_subtotal = 0
         for item in items:
@@ -679,9 +686,16 @@ def update_sale_items(
             precio = max(int(item.get("precio_unitario") or 0), 0)
             item_sub = qty * precio
             new_subtotal += item_sub
+
+            sku = item.get("sku") or None
+            if not sku:
+                if catalog is None:
+                    catalog = s.execute(select(Producto)).scalars().all()
+                sku = _match_sku(catalog, str(item["nombre_raw"]))
+
             s.add(VentaItem(
                 venta_id=sale_id,
-                sku=item.get("sku") or None,
+                sku=sku,
                 producto_nombre_raw=str(item["nombre_raw"]).strip() or "—",
                 cantidad=qty,
                 precio_unitario=precio,
@@ -767,6 +781,7 @@ def update_purchase_items(
         precio_costo_unitario   int | None
     """
     from sqlalchemy import update as sql_update, delete as sql_delete
+    from api.guardar_venta import _match_sku
     with Session(engine) as s:
         # 1. Reverse old stock additions using a column expression so the DB
         #    does the arithmetic — avoids ORM staleness if the same SKU appears
@@ -786,12 +801,23 @@ def update_purchase_items(
         # 2. Delete old items
         s.execute(sql_delete(DetalleCompra).where(DetalleCompra.compra_id == purchase_id))
 
+        # Loaded lazily only if some row is missing a SKU (avoids the query otherwise).
+        catalog = None
+
         # 3. Insert new items and apply stock additions (same atomic pattern)
         new_total = 0
         for item in items:
             sku = item.get("sku") or None
             if isinstance(sku, str) and not sku.strip():
                 sku = None
+
+            # Fallback: the UI dropdown can fail to resolve a SKU even when the
+            # raw name clearly matches a catalog product. Re-run the matcher
+            # before saving the item with no SKU (and therefore no stock update).
+            if not sku:
+                if catalog is None:
+                    catalog = s.execute(select(Producto)).scalars().all()
+                sku = _match_sku(catalog, str(item["nombre_raw"]))
             quantity = max(int(item.get("cantidad") or 1), 1)
             cost = int(item["precio_costo_unitario"]) if item.get("precio_costo_unitario") else None
             if cost:

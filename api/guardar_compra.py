@@ -26,6 +26,7 @@ sys.path.insert(0, _root)
 
 from models import Compra, DetalleCompra, Producto
 from api.rappi_client import sync_after_purchase
+from api.guardar_venta import _match_sku
 
 
 def save_purchase(
@@ -61,10 +62,21 @@ def save_purchase(
     session.add(purchase)
     session.flush()
 
+    # Loaded lazily only if some row is missing a SKU (avoids the query otherwise).
+    catalog = None
+
     for _, row in df.iterrows():
         sku = row.get("sku") or None
         if isinstance(sku, str) and sku.strip() == "":
             sku = None
+
+        # Fallback: the UI dropdown can fail to resolve a SKU (e.g. stale catalog
+        # cache, whitespace mismatch) even when the raw name clearly matches a
+        # product. Re-run the same matcher used for sales before giving up.
+        if not sku:
+            if catalog is None:
+                catalog = session.execute(select(Producto)).scalars().all()
+            sku = _match_sku(catalog, str(row["producto_nombre_raw"]))
 
         quantity = int(row["cantidad"])
         cost = int(row["precio_costo_unitario"]) if pd.notna(row.get("precio_costo_unitario")) else None
