@@ -9,7 +9,7 @@ Ejecutar desde la raíz del proyecto:
 
 import os
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 
@@ -290,7 +290,7 @@ footer { display: none !important; }
 # Imports de la app (después del page_config)
 # ---------------------------------------------------------------------------
 from app.db_queries import (
-    get_engine, get_kpis,
+    get_engine, get_kpis, today_bogota,
     get_sales_by_channel, get_daily_trend, get_top_products,
     get_top_billers, get_recent_sales,
     get_inventory, get_stock_alerts, get_orders_without_stock,
@@ -1111,9 +1111,9 @@ def page_dashboard(engine):
 
     # ── Period selector ──
     if "_dash_start" not in st.session_state:
-        st.session_state["_dash_start"] = date.today() - timedelta(days=29)
+        st.session_state["_dash_start"] = today_bogota() - timedelta(days=29)
     if "_dash_end" not in st.session_state:
-        st.session_state["_dash_end"] = date.today()
+        st.session_state["_dash_end"] = today_bogota()
 
     pd1, pd2 = st.columns(2)
     with pd1:
@@ -1126,8 +1126,8 @@ def page_dashboard(engine):
     qc = st.columns(4)
     for i, (lbl, delta) in enumerate([("Hoy", 0), ("7 días", 6), ("30 días", 29), ("90 días", 89)]):
         if qc[i].button(lbl, key=f"period_{delta}"):
-            st.session_state["_dash_start"] = date.today() - timedelta(days=delta)
-            st.session_state["_dash_end"] = date.today()
+            st.session_state["_dash_start"] = today_bogota() - timedelta(days=delta)
+            st.session_state["_dash_end"] = today_bogota()
             st.rerun()
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -2217,9 +2217,9 @@ def _render_sales_history(engine):
     # ── Filters ──
     fc1, fc2, fc3, fc4 = st.columns([1, 1, 1, 1])
     with fc1:
-        f_start = st.date_input("Desde", value=date.today() - timedelta(days=29), key="sv_start")
+        f_start = st.date_input("Desde", value=today_bogota() - timedelta(days=29), key="sv_start")
     with fc2:
-        f_end = st.date_input("Hasta", value=date.today(), key="sv_end")
+        f_end = st.date_input("Hasta", value=today_bogota(), key="sv_end")
     with fc3:
         estados_opts = ["Todos"] + [e.value for e in __import__("models", fromlist=["EstadoVenta"]).EstadoVenta]
         f_estado = st.selectbox("Estado", estados_opts, key="sv_estado")
@@ -2380,10 +2380,10 @@ def page_clientes(engine):
     # ── Period + department filters (shared across all tabs) ──
     f1, f2, f3 = st.columns([1, 1, 2])
     with f1:
-        cl_start = st.date_input("Desde", value=date.today() - timedelta(days=89),
+        cl_start = st.date_input("Desde", value=today_bogota() - timedelta(days=89),
                                  key="cl_start")
     with f2:
-        cl_end = st.date_input("Hasta", value=date.today(), key="cl_end")
+        cl_end = st.date_input("Hasta", value=today_bogota(), key="cl_end")
     with f3:
         deptos = get_shipping_departments(engine)
         depto_opts = ["Todos los departamentos"] + deptos
@@ -2396,8 +2396,8 @@ def page_clientes(engine):
     for i, (lbl, delta) in enumerate([("30 días", 29), ("90 días", 89),
                                        ("6 meses", 179), ("Este año", 364)]):
         if qc[i].button(lbl, key=f"cl_period_{delta}"):
-            st.session_state["cl_start"] = date.today() - timedelta(days=delta)
-            st.session_state["cl_end"] = date.today()
+            st.session_state["cl_start"] = today_bogota() - timedelta(days=delta)
+            st.session_state["cl_end"] = today_bogota()
             st.rerun()
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)

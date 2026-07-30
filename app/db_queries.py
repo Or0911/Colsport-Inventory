@@ -7,7 +7,7 @@ Uses @st.cache_data / @st.cache_resource to minimize round-trips.
 
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -23,6 +23,20 @@ from models import (
     ComboComponente, AlertaPedido, Compra, DetalleCompra, Envio, RappiDetalle,
     SkuMatchLog, StockAdjustmentLog,
 )
+
+# Timestamps are stored in UTC (Postgres/Supabase default via func.now()).
+# Colombia is UTC-5 year-round (no DST), so every "local" date boundary,
+# display value, or day-grouping needs this fixed shift applied.
+BOGOTA_OFFSET = timedelta(hours=5)
+
+
+def _bogota_date_expr(col):
+    """SQL expression: Bogota calendar date for a UTC-stored DateTime column."""
+    return func.date(col - BOGOTA_OFFSET)
+
+
+def today_bogota() -> date:
+    return (datetime.utcnow() - BOGOTA_OFFSET).date()
 
 
 @st.cache_resource
@@ -44,10 +58,10 @@ def get_engine():
 
 @st.cache_data(ttl=60)
 def get_kpis(_engine) -> dict:
-    today = date.today()
-    month_start = datetime.combine(today.replace(day=1), datetime.min.time())
-    today_start = datetime.combine(today, datetime.min.time())
-    today_end   = datetime.combine(today, datetime.max.time())
+    today = today_bogota()
+    month_start = datetime.combine(today.replace(day=1), datetime.min.time()) + BOGOTA_OFFSET
+    today_start = datetime.combine(today, datetime.min.time()) + BOGOTA_OFFSET
+    today_end   = datetime.combine(today, datetime.max.time()) + BOGOTA_OFFSET
 
     with Session(_engine) as s:
         def _agg(q):
@@ -89,8 +103,8 @@ def get_sales_by_channel(_engine, start: date, end: date) -> pd.DataFrame:
                 func.coalesce(func.sum(Venta.total), 0).label("Total"),
             )
             .join(Canal, Venta.canal_id == Canal.id)
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
             .where(Venta.estado != EstadoVenta.cancelada)
             .group_by(Canal.nombre)
             .order_by(desc("Total"))
@@ -103,15 +117,15 @@ def get_daily_trend(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
-                func.date(Venta.fecha).label("Fecha"),
+                _bogota_date_expr(Venta.fecha).label("Fecha"),
                 func.count(Venta.id).label("Ventas"),
                 func.coalesce(func.sum(Venta.total), 0).label("Total"),
             )
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
             .where(Venta.estado != EstadoVenta.cancelada)
-            .group_by(func.date(Venta.fecha))
-            .order_by(func.date(Venta.fecha))
+            .group_by(_bogota_date_expr(Venta.fecha))
+            .order_by(_bogota_date_expr(Venta.fecha))
         ).all()
     return pd.DataFrame(rows, columns=["Fecha", "Ventas", "Total"])
 
@@ -178,7 +192,7 @@ def get_recent_sales(_engine, limit: int = 15) -> pd.DataFrame:
         ).all()
     df = pd.DataFrame(rows, columns=["ID", "Fecha", "Canal", "Cliente", "Total", "Estado", "Pago"])
     if not df.empty:
-        df["Fecha"] = pd.to_datetime(df["Fecha"]).dt.strftime("%d/%m %H:%M")
+        df["Fecha"] = (pd.to_datetime(df["Fecha"]) - BOGOTA_OFFSET).dt.strftime("%d/%m %H:%M")
         df["Total"] = df["Total"].apply(lambda x: f"${x:,.0f}".replace(",", "."))
     return df
 
@@ -341,8 +355,8 @@ def get_orders_without_stock(_engine) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def get_purchase_kpis(_engine) -> dict:
-    today = date.today()
-    month_start = datetime.combine(today.replace(day=1), datetime.min.time())
+    today = today_bogota()
+    month_start = datetime.combine(today.replace(day=1), datetime.min.time()) + BOGOTA_OFFSET
     with Session(_engine) as s:
         def _agg(q):
             row = s.execute(q).one()
@@ -358,14 +372,14 @@ def get_purchase_trend(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         rows = s.execute(
             select(
-                func.date(Compra.fecha).label("Fecha"),
+                _bogota_date_expr(Compra.fecha).label("Fecha"),
                 func.coalesce(func.sum(Compra.monto_total), 0).label("Total"),
                 func.count(Compra.id).label("Compras"),
             )
-            .where(func.date(Compra.fecha) >= start)
-            .where(func.date(Compra.fecha) <= end)
-            .group_by(func.date(Compra.fecha))
-            .order_by(func.date(Compra.fecha))
+            .where(_bogota_date_expr(Compra.fecha) >= start)
+            .where(_bogota_date_expr(Compra.fecha) <= end)
+            .group_by(_bogota_date_expr(Compra.fecha))
+            .order_by(_bogota_date_expr(Compra.fecha))
         ).all()
     return pd.DataFrame(rows, columns=["Fecha", "Total", "Compras"])
 
@@ -379,8 +393,8 @@ def get_purchases_by_supplier(_engine, start: date, end: date) -> pd.DataFrame:
                 func.count(Compra.id).label("Compras"),
                 func.coalesce(func.sum(Compra.monto_total), 0).label("Total"),
             )
-            .where(func.date(Compra.fecha) >= start)
-            .where(func.date(Compra.fecha) <= end)
+            .where(_bogota_date_expr(Compra.fecha) >= start)
+            .where(_bogota_date_expr(Compra.fecha) <= end)
             .group_by(Compra.proveedor)
             .order_by(desc("Total"))
         ).all()
@@ -393,23 +407,23 @@ def get_daily_margin(_engine, start: date, end: date) -> pd.DataFrame:
     with Session(_engine) as s:
         sales_rows = s.execute(
             select(
-                func.date(Venta.fecha).label("Fecha"),
+                _bogota_date_expr(Venta.fecha).label("Fecha"),
                 func.coalesce(func.sum(Venta.total), 0).label("Ventas_total"),
             )
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
             .where(Venta.estado != EstadoVenta.cancelada)
-            .group_by(func.date(Venta.fecha))
+            .group_by(_bogota_date_expr(Venta.fecha))
         ).all()
 
         purchase_rows = s.execute(
             select(
-                func.date(Compra.fecha).label("Fecha"),
+                _bogota_date_expr(Compra.fecha).label("Fecha"),
                 func.coalesce(func.sum(Compra.monto_total), 0).label("Compras_total"),
             )
-            .where(func.date(Compra.fecha) >= start)
-            .where(func.date(Compra.fecha) <= end)
-            .group_by(func.date(Compra.fecha))
+            .where(_bogota_date_expr(Compra.fecha) >= start)
+            .where(_bogota_date_expr(Compra.fecha) <= end)
+            .group_by(_bogota_date_expr(Compra.fecha))
         ).all()
 
     df_sales = pd.DataFrame(sales_rows, columns=["Fecha", "Ventas_total"])
@@ -437,8 +451,8 @@ def get_recent_purchases(_engine, limit: int = 20) -> pd.DataFrame:
         ).all()
     df = pd.DataFrame(rows, columns=["ID", "Fecha", "Proveedor", "Monto total", "Items"])
     if not df.empty:
-        df["fecha_dt"] = pd.to_datetime(df["Fecha"])   # raw timestamp for 24h edit window check
-        df["Fecha"] = df["fecha_dt"].dt.strftime("%d/%m/%Y %H:%M")
+        df["fecha_dt"] = pd.to_datetime(df["Fecha"])   # raw UTC timestamp, for 24h edit window check
+        df["Fecha"] = (df["fecha_dt"] - BOGOTA_OFFSET).dt.strftime("%d/%m/%Y %H:%M")
         df["Monto total"] = df["Monto total"].apply(
             lambda x: f"${int(x):,}".replace(",", ".") if pd.notna(x) and x else "—"
         )
@@ -487,7 +501,7 @@ def get_sale_detail(_engine, sale_id: int) -> Optional[dict]:
 
         return {
             "id": sale.id,
-            "fecha": sale.fecha,
+            "fecha": sale.fecha - BOGOTA_OFFSET if sale.fecha else None,
             "canal": canal.nombre if canal else "—",
             "estado": sale.estado,
             "cliente_nombre": sale.cliente_nombre_raw or (cliente.nombre if cliente else None),
@@ -550,8 +564,8 @@ def get_money_by_account(_engine, start: date, end: date) -> pd.DataFrame:
                 func.coalesce(func.sum(Venta.total), 0).label("Total"),
             )
             .join(Venta, Pago.venta_id == Venta.id)
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
             .where(Venta.estado != EstadoVenta.cancelada)
             .group_by(Pago.metodo, Pago.cuenta_destino)
             .order_by(desc("Total"))
@@ -589,8 +603,8 @@ def get_all_sales(
             )
             .join(Canal, Venta.canal_id == Canal.id)
             .outerjoin(Pago, Pago.venta_id == Venta.id)
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
         )
         if estado:
             q = q.where(Venta.estado == estado)
@@ -601,8 +615,8 @@ def get_all_sales(
 
     df = pd.DataFrame(rows, columns=["ID", "Fecha", "Canal", "Cliente", "Bruto", "Total", "Estado", "Pago", "Cuenta", "Notas"])
     if not df.empty:
-        df["fecha_dt"] = pd.to_datetime(df["Fecha"])   # raw timestamp for 24h edit window check
-        df["Fecha"] = df["fecha_dt"].dt.strftime("%d/%m/%Y %H:%M")
+        df["fecha_dt"] = pd.to_datetime(df["Fecha"])   # raw UTC timestamp, for 24h edit window check
+        df["Fecha"] = (df["fecha_dt"] - BOGOTA_OFFSET).dt.strftime("%d/%m/%Y %H:%M")
         df["Total_num"] = df["Total"]
         df["Total"] = df["Total"].apply(lambda x: f"${int(x):,}".replace(",", "."))
         df["Bruto"] = df["Bruto"].apply(lambda x: f"${int(x):,}".replace(",", "."))
@@ -612,8 +626,8 @@ def get_all_sales(
 @st.cache_data(ttl=60)
 def get_kpis_period(_engine, start: date, end: date) -> dict:
     """Sales + purchase KPIs aggregated for an arbitrary date range (dashboard filter)."""
-    start_dt = datetime.combine(start, datetime.min.time())
-    end_dt   = datetime.combine(end,   datetime.max.time())
+    start_dt = datetime.combine(start, datetime.min.time()) + BOGOTA_OFFSET
+    end_dt   = datetime.combine(end,   datetime.max.time()) + BOGOTA_OFFSET
     with Session(_engine) as s:
         v = s.execute(
             select(
@@ -737,7 +751,7 @@ def get_purchase_detail(_engine, purchase_id: int) -> Optional[dict]:
 
         return {
             "id": compra.id,
-            "fecha": compra.fecha,
+            "fecha": compra.fecha - BOGOTA_OFFSET if compra.fecha else None,
             "proveedor": compra.proveedor or "—",
             "monto_total": compra.monto_total,
             "items": [
@@ -925,7 +939,7 @@ def get_product_transactions(_engine, sku: str) -> pd.DataFrame:
                                      "Precio/Costo unit.", "Subtotal", "Referencia", "Producto raw"])
 
     df = pd.DataFrame(rows)
-    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    df["Fecha"] = pd.to_datetime(df["Fecha"]) - BOGOTA_OFFSET
     return df.sort_values("Fecha", ascending=False).reset_index(drop=True)
 
 
@@ -1014,7 +1028,7 @@ def get_sku_match_logs(_engine, limit: int = 200) -> pd.DataFrame:
 
     df = pd.DataFrame(rows, columns=["Fecha", "Tipo", "Nombre raw", "SKU sugerido",
                                      "Nombre sugerido", "SKU confirmado"])
-    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    df["Fecha"] = pd.to_datetime(df["Fecha"]) - BOGOTA_OFFSET
     return df
 
 
@@ -1041,7 +1055,7 @@ def get_stock_adjustment_logs(_engine, limit: int = 200) -> pd.DataFrame:
 
     df = pd.DataFrame(rows, columns=["Fecha", "SKU", "Producto", "Stock antes",
                                      "Delta", "Stock después", "Motivo"])
-    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    df["Fecha"] = pd.to_datetime(df["Fecha"]) - BOGOTA_OFFSET
     return df
 
 
@@ -1093,8 +1107,8 @@ def get_client_stats(
             )
             .outerjoin(Envio, Envio.venta_id == Venta.id)
             .where(Venta.estado != EstadoVenta.cancelada)
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
         )
         if departamento:
             value_q = value_q.where(Envio.departamento == departamento)
@@ -1115,8 +1129,8 @@ def get_client_stats(
             .join(VentaItem, VentaItem.venta_id == Venta.id)
             .outerjoin(Envio, Envio.venta_id == Venta.id)
             .where(Venta.estado != EstadoVenta.cancelada)
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
         )
         if departamento:
             units_q = units_q.where(Envio.departamento == departamento)
@@ -1163,8 +1177,8 @@ def get_client_category_breakdown(
             .join(Producto, VentaItem.sku == Producto.sku)
             .outerjoin(Envio, Envio.venta_id == Venta.id)
             .where(Venta.estado != EstadoVenta.cancelada)
-            .where(func.date(Venta.fecha) >= start)
-            .where(func.date(Venta.fecha) <= end)
+            .where(_bogota_date_expr(Venta.fecha) >= start)
+            .where(_bogota_date_expr(Venta.fecha) <= end)
             .where(VentaItem.sku.isnot(None))
         )
         if departamento:
