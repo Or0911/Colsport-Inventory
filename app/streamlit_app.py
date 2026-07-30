@@ -1136,7 +1136,7 @@ def page_dashboard(engine):
     kpis_periodo = get_kpis_period(engine, start_date, end_date)
     df_canal  = get_sales_by_channel(engine, start_date, end_date)
     df_tend   = get_daily_trend(engine, start_date, end_date)
-    df_top    = get_top_products(engine)
+    df_top    = get_top_products(engine, start=start_date, end=end_date)
     df_alerr  = get_stock_alerts(engine, umbral=-1)   # only negative stock
 
     ventas_neto  = kpis_periodo["ventas"]["neto"]
@@ -1230,7 +1230,7 @@ def page_dashboard(engine):
         'margin-bottom:8px">Últimas Ventas</div>',
         unsafe_allow_html=True,
     )
-    df_rec = get_recent_sales(engine, limit=15)
+    df_rec = get_recent_sales(engine, limit=15, start=start_date, end=end_date)
     if df_rec.empty:
         st.markdown(
             '<div style="background:#f5f2eb;border:1.5px dashed #d4d0c8;border-radius:2px;'

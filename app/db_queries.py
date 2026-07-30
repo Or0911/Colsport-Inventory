@@ -131,11 +131,11 @@ def get_daily_trend(_engine, start: date, end: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def get_top_products(_engine, limit: int = 10) -> pd.DataFrame:
+def get_top_products(_engine, limit: int = 10, start: Optional[date] = None, end: Optional[date] = None) -> pd.DataFrame:
     # Group only by (sku, catalog name) so all sales of the same SKU are
     # summed into one row regardless of how the product was named in each message.
     with Session(_engine) as s:
-        rows = s.execute(
+        q = (
             select(
                 VentaItem.sku,
                 Producto.nombre.label("Producto"),
@@ -146,7 +146,13 @@ def get_top_products(_engine, limit: int = 10) -> pd.DataFrame:
             .join(Venta, VentaItem.venta_id == Venta.id)
             .where(Venta.estado != EstadoVenta.cancelada)
             .where(VentaItem.sku.isnot(None))
-            .group_by(VentaItem.sku, Producto.nombre)
+        )
+        if start:
+            q = q.where(_bogota_date_expr(Venta.fecha) >= start)
+        if end:
+            q = q.where(_bogota_date_expr(Venta.fecha) <= end)
+        rows = s.execute(
+            q.group_by(VentaItem.sku, Producto.nombre)
             .order_by(desc("Unidades"))
             .limit(limit)
         ).all()
@@ -173,9 +179,9 @@ def get_top_billers(_engine, limit: int = 10) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_recent_sales(_engine, limit: int = 15) -> pd.DataFrame:
+def get_recent_sales(_engine, limit: int = 15, start: Optional[date] = None, end: Optional[date] = None) -> pd.DataFrame:
     with Session(_engine) as s:
-        rows = s.execute(
+        q = (
             select(
                 Venta.id,
                 Venta.fecha,
@@ -187,8 +193,13 @@ def get_recent_sales(_engine, limit: int = 15) -> pd.DataFrame:
             )
             .join(Canal, Venta.canal_id == Canal.id)
             .outerjoin(Pago, Pago.venta_id == Venta.id)
-            .order_by(desc(Venta.fecha))
-            .limit(limit)
+        )
+        if start:
+            q = q.where(_bogota_date_expr(Venta.fecha) >= start)
+        if end:
+            q = q.where(_bogota_date_expr(Venta.fecha) <= end)
+        rows = s.execute(
+            q.order_by(desc(Venta.fecha)).limit(limit)
         ).all()
     df = pd.DataFrame(rows, columns=["ID", "Fecha", "Canal", "Cliente", "Total", "Estado", "Pago"])
     if not df.empty:
